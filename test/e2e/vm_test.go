@@ -52,10 +52,20 @@ func (suite *VMTestSuite) SetupSuite() {
 
 // SetupTest runs before each test
 func (suite *VMTestSuite) SetupTest() {
-	// Clean up any existing pm2go services
+	// Clean up any existing pm2go services more thoroughly
 	suite.runPM2goIgnoreError("delete", "all")
+	
+	// Stop and disable any remaining pm2-* services
+	suite.runIgnoreError("systemctl", "--user", "stop", "pm2-*")
+	suite.runIgnoreError("systemctl", "--user", "disable", "pm2-*")
+	
+	// Reset failed services
 	suite.runIgnoreError("systemctl", "--user", "reset-failed")
-	time.Sleep(1 * time.Second)
+	
+	// Reload systemd daemon
+	suite.runIgnoreError("systemctl", "--user", "daemon-reload")
+	
+	time.Sleep(2 * time.Second)
 }
 
 // Test basic PM2go operations

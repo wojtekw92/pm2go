@@ -176,7 +176,28 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 		execStart = "python3 " + execStart
 	}
 
-	service := fmt.Sprintf(`[Unit]
+	var service string
+	if m.userMode {
+		// In user mode, don't specify User= as it causes "operation not permitted"
+		service = fmt.Sprintf(`[Unit]
+Description=PM2 App: %s
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%s
+ExecStart=%s
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+`, config.Name, workingDir, execStart)
+	} else {
+		// In system mode, specify the user
+		service = fmt.Sprintf(`[Unit]
 Description=PM2 App: %s
 After=network.target
 
@@ -193,6 +214,7 @@ StandardError=journal
 [Install]
 WantedBy=default.target
 `, config.Name, m.getCurrentUser(), workingDir, execStart)
+	}
 
 	// Add environment variables if present
 	if config.Env != nil {

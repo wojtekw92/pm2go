@@ -38,11 +38,11 @@ func handleStart(scriptOrFile, name string, envVars []string) {
 	config.Script = scriptOrFile
 	config.Env = make(map[string]string)
 
-	// Add shell environment variables (inherit from parent process)
-	for _, env := range os.Environ() {
-		parts := strings.SplitN(env, "=", 2)
-		if len(parts) == 2 {
-			config.Env[parts[0]] = parts[1]
+	// Add safe shell environment variables (inherit from parent process)
+	safeEnvVars := []string{"PATH", "HOME", "USER", "NODE_ENV", "PYTHON_ENV", "PORT"}
+	for _, envName := range safeEnvVars {
+		if value := os.Getenv(envName); value != "" {
+			config.Env[envName] = value
 		}
 	}
 
