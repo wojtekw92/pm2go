@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,10 +45,11 @@ func (suite *E2ETestSuite) SetupSuite() {
 	suite.containerName = "pm2go-e2e-test"
 	suite.pm2goPath = "/usr/local/bin/pm2go"
 
-	// Build pm2go binary
-	suite.T().Log("Building pm2go binary...")
-	buildCmd := exec.Command("go", "build", "-o", "pm2go", ".")
+	// Build pm2go binary for Linux
+	suite.T().Log("Building pm2go binary for Linux...")
+	buildCmd := exec.Command("go", "build", "-o", "pm2go")
 	buildCmd.Dir = suite.getProjectRoot()
+	buildCmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH=amd64")
 	err := buildCmd.Run()
 	require.NoError(suite.T(), err, "Failed to build pm2go binary")
 
@@ -79,8 +81,10 @@ func (suite *E2ETestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (suite *E2ETestSuite) SetupTest() {
-	// Clean up any existing pm2go processes
-	suite.runInContainer("sudo", "-u", "ubuntu", suite.pm2goPath, "delete", "all", "||", "true")
+	// Clean up any existing pm2go processes by stopping systemd services
+	suite.runInContainerIgnoreError("bash", "-c", "sudo -u ubuntu bash -c 'export XDG_RUNTIME_DIR=/run/user/1000 && systemctl --user stop pm2-* || true'")
+	suite.runInContainerIgnoreError("bash", "-c", "sudo -u ubuntu bash -c 'export XDG_RUNTIME_DIR=/run/user/1000 && systemctl --user disable pm2-* || true'")
+	suite.runInContainerIgnoreError("bash", "-c", "sudo -u ubuntu bash -c 'export XDG_RUNTIME_DIR=/run/user/1000 && systemctl --user reset-failed || true'")
 	time.Sleep(2 * time.Second)
 }
 
@@ -88,7 +92,7 @@ func (suite *E2ETestSuite) SetupTest() {
 func (suite *E2ETestSuite) TestBasicOperations() {
 	// Test 1: Start a simple application
 	suite.T().Run("StartApplication", func(t *testing.T) {
-		output := suite.runInContainer("sudo", "-u", "ubuntu", suite.pm2goPath, "start", "/home/ubuntu/apps/test-app.js", "--name", "test-basic")
+		output := suite.runPM2go("start", "/home/ubuntu/apps/test-app.js", "--name", "test-basic")
 		assert.Contains(t, output, "✓ Started test-basic")
 	})
 
@@ -333,16 +337,13 @@ func (suite *E2ETestSuite) copyBinaryToContainer() {
 }
 
 func (suite *E2ETestSuite) setupPM2go() {
-	// Enable lingering for ubuntu user (should already be done in Dockerfile)
-	suite.runInContainer("systemctl", "--user", "daemon-reload")
-	
-	// Switch to ubuntu user and configure startup
-	suite.runInContainer("sudo", "-u", "ubuntu", "-H", "bash", "-c", "XDG_RUNTIME_DIR=/run/user/1000 systemctl --user daemon-reload")
+	// Initialize systemd user session using the initialization script
+	suite.runInContainer("/usr/local/bin/init-user-systemd.sh")
 }
 
 func (suite *E2ETestSuite) runInContainer(args ...string) string {
 	output, err := suite.runInContainerWithError(args...)
-	require.NoError(suite.T(), err, "Command failed: %v", args)
+	require.NoError(suite.T(), err, "Command failed: %v\nOutput: %s", args, output)
 	return output
 }
 
@@ -357,6 +358,27 @@ func (suite *E2ETestSuite) runInContainerWithError(args ...string) (string, erro
 	
 	output, err := cmd.CombinedOutput()
 	return string(output), err
+}
+
+// Helper method to run pm2go commands as ubuntu user with proper environment
+func (suite *E2ETestSuite) runPM2go(args ...string) string {
+	// Build the full command with proper environment setup
+	pm2goCmd := append([]string{suite.pm2goPath}, args...)
+	fullCmd := fmt.Sprintf("sudo -u ubuntu bash -c 'export XDG_RUNTIME_DIR=/run/user/1000 && %s'", 
+		strings.Join(pm2goCmd, " "))
+	
+	output := suite.runInContainer("bash", "-c", fullCmd)
+	return output
+}
+
+func (suite *E2ETestSuite) runPM2goIgnoreError(args ...string) string {
+	// Build the full command with proper environment setup
+	pm2goCmd := append([]string{suite.pm2goPath}, args...)
+	fullCmd := fmt.Sprintf("sudo -u ubuntu bash -c 'export XDG_RUNTIME_DIR=/run/user/1000 && %s || true'", 
+		strings.Join(pm2goCmd, " "))
+	
+	output := suite.runInContainerIgnoreError("bash", "-c", fullCmd)
+	return output
 }
 
 // TestE2E is the entry point for the test suite
