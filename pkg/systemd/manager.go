@@ -1,0 +1,283 @@
+package systemd
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// Manager handles systemd operations for PM2-style process management
+type Manager struct {
+	userMode bool
+	prefix   string // prefix for service names to avoid conflicts
+}
+
+// NewManager creates a new systemd manager instance
+func NewManager() *Manager {
+	return &Manager{
+		userMode: os.Getuid() != 0, // use user services if not root
+		prefix:   "pm2-",
+	}
+}
+
+// serviceName returns the systemd service name for an app
+func (m *Manager) serviceName(appName string) string {
+	return m.prefix + appName
+}
+
+// Start creates and starts a systemd service for the given app config
+func (m *Manager) Start(config AppConfig) error {
+	serviceName := m.serviceName(config.Name)
+
+	// Generate systemd service file content
+	serviceContent := m.generateServiceFile(config)
+
+	// Write service file
+	serviceDir := m.getServiceDir()
+	servicePath := filepath.Join(serviceDir, serviceName+".service")
+
+	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
+		return fmt.Errorf("failed to write service file: %v", err)
+	}
+
+	// Reload systemd and start service
+	if err := m.systemdReload(); err != nil {
+		return fmt.Errorf("failed to reload systemd: %v", err)
+	}
+
+	if err := m.systemdCommand("start", serviceName); err != nil {
+		return fmt.Errorf("failed to start service: %v", err)
+	}
+
+	if err := m.systemdCommand("enable", serviceName); err != nil {
+		return fmt.Errorf("failed to enable service: %v", err)
+	}
+
+	return nil
+}
+
+// Stop stops a systemd service
+func (m *Manager) Stop(appName string) error {
+	serviceName := m.serviceName(appName)
+	return m.systemdCommand("stop", serviceName)
+}
+
+// Delete stops and removes a systemd service
+func (m *Manager) Delete(appName string) error {
+	serviceName := m.serviceName(appName)
+
+	// Stop service first
+	m.systemdCommand("stop", serviceName)
+	m.systemdCommand("disable", serviceName)
+
+	// Remove service file
+	serviceDir := m.getServiceDir()
+	servicePath := filepath.Join(serviceDir, serviceName+".service")
+	os.Remove(servicePath)
+
+	return m.systemdReload()
+}
+
+// List returns a list of all managed processes
+func (m *Manager) List() ([]ProcessInfo, error) {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "list-units", m.prefix+"*", "--no-pager")
+
+	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	var processes []ProcessInfo
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, m.prefix) && strings.Contains(line, ".service") {
+			parts := strings.Fields(line)
+			if len(parts) >= 4 {
+				serviceName := parts[0]
+				appName := strings.TrimPrefix(strings.TrimSuffix(serviceName, ".service"), m.prefix)
+				status := parts[2]
+
+				// Get PID for the service
+				pid := m.getServicePID(serviceName)
+
+				process := ProcessInfo{
+					PID:  pid,
+					Name: appName,
+					PM2Env: PM2Env{
+						Name:             appName,
+						ExecMode:         "fork",
+						Status:           m.mapSystemdStatus(status),
+						PMUptime:         time.Now().Unix() * 1000,
+						CreatedAt:        time.Now().Unix() * 1000,
+						RestartTime:      0,
+						UnstableRestarts: 0,
+						Versioning:       nil,
+						Node: PM2Node{
+							Version: "unknown",
+						},
+					},
+					Monit: PM2Monit{
+						Memory: 0,
+						CPU:    0,
+					},
+				}
+				processes = append(processes, process)
+			}
+		}
+	}
+
+	return processes, nil
+}
+
+// Flush removes logs for all apps or a specific app
+func (m *Manager) Flush(appName string) error {
+	if appName == "" {
+		// Flush all logs
+		cmd := []string{"journalctl"}
+		if m.userMode {
+			cmd = append(cmd, "--user")
+		}
+		cmd = append(cmd, "--rotate")
+		return exec.Command(cmd[0], cmd[1:]...).Run()
+	}
+
+	// Flush specific app logs
+	serviceName := m.serviceName(appName)
+	cmd := []string{"journalctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "--unit", serviceName, "--rotate")
+	return exec.Command(cmd[0], cmd[1:]...).Run()
+}
+
+// generateServiceFile creates the systemd service file content
+func (m *Manager) generateServiceFile(config AppConfig) string {
+	workingDir := config.Cwd
+	if workingDir == "" {
+		workingDir, _ = os.Getwd()
+	}
+
+	execStart := config.Script
+	if config.Args != "" {
+		execStart += " " + config.Args
+	}
+
+	// Handle Python scripts
+	if strings.HasSuffix(config.Script, ".py") {
+		execStart = "python3 " + execStart
+	}
+
+	service := fmt.Sprintf(`[Unit]
+Description=PM2 App: %s
+After=network.target
+
+[Service]
+Type=simple
+User=%s
+WorkingDirectory=%s
+ExecStart=%s
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
+`, config.Name, m.getCurrentUser(), workingDir, execStart)
+
+	// Add environment variables if present
+	if config.Env != nil {
+		envLines := ""
+		for key, value := range config.Env {
+			envLines += fmt.Sprintf("Environment=%s=%s\n", key, value)
+		}
+		service = strings.Replace(service, "[Install]", envLines+"\n[Install]", 1)
+	}
+
+	return service
+}
+
+// getServiceDir returns the directory where service files should be stored
+func (m *Manager) getServiceDir() string {
+	if m.userMode {
+		home, _ := os.UserHomeDir()
+		dir := filepath.Join(home, ".config/systemd/user")
+		os.MkdirAll(dir, 0755)
+		return dir
+	}
+	return "/etc/systemd/system"
+}
+
+// getCurrentUser returns the current username
+func (m *Manager) getCurrentUser() string {
+	if user := os.Getenv("USER"); user != "" {
+		return user
+	}
+	return "nobody"
+}
+
+// systemdReload reloads the systemd daemon
+func (m *Manager) systemdReload() error {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "daemon-reload")
+
+	return exec.Command(cmd[0], cmd[1:]...).Run()
+}
+
+// systemdCommand executes a systemctl command
+func (m *Manager) systemdCommand(action, serviceName string) error {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, action, serviceName)
+
+	return exec.Command(cmd[0], cmd[1:]...).Run()
+}
+
+// getServicePID returns the PID of a service
+func (m *Manager) getServicePID(serviceName string) int {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "show", serviceName, "--property=MainPID", "--value")
+
+	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	if err != nil {
+		return 0
+	}
+
+	pidStr := strings.TrimSpace(string(output))
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return 0
+	}
+	return pid
+}
+
+// mapSystemdStatus maps systemd status to PM2 status
+func (m *Manager) mapSystemdStatus(status string) string {
+	switch status {
+	case "active":
+		return "online"
+	case "inactive":
+		return "stopped"
+	case "failed":
+		return "errored"
+	default:
+		return "unknown"
+	}
+}
