@@ -20,8 +20,15 @@ if ! command -v systemctl &> /dev/null; then
     exit 1
 fi
 
+# Find project root (where go.mod is located)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "Project root: $PROJECT_ROOT"
+
 # Build pm2go for Linux (in case it was built on different arch)
 echo "Building pm2go for Linux..."
+cd "$PROJECT_ROOT"
 if [[ -f "go.mod" ]]; then
     go build -o pm2go .
 else
@@ -35,15 +42,13 @@ chmod +x pm2go
 # Copy test fixtures to temporary directory
 TEST_DIR="/tmp/pm2go-test"
 mkdir -p "$TEST_DIR"
-cp test/fixtures/* "$TEST_DIR/"
-cp pm2go "$TEST_DIR/"
-
-cd "$TEST_DIR"
+cp "$PROJECT_ROOT"/test/fixtures/* "$TEST_DIR/"
+cp "$PROJECT_ROOT"/pm2go "$TEST_DIR/"
 
 echo "Test environment setup complete."
 echo "Test directory: $TEST_DIR"
 echo "Running E2E tests..."
 
 # Run the VM-specific E2E tests  
-cd "$PWD" # Go back to project root for go test
+cd "$PROJECT_ROOT" # Go back to project root for go test
 go test -v ./test/e2e/ -run TestVM -args -testdir="$TEST_DIR"
