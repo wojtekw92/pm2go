@@ -50,5 +50,5 @@ echo "Test directory: $TEST_DIR"
 echo "Running E2E tests..."
 
 # Run the VM-specific E2E tests  
-cd "$PROJECT_ROOT" # Go back to project root for go test
-go test -v ./test/e2e/ -run TestVM -args -testdir="$TEST_DIR"
+cd "$PROJECT_ROOT/test/e2e" # Go to e2e directory (has its own go.mod)
+go test -v . -run TestVM -args -testdir="$TEST_DIR"
