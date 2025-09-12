@@ -87,7 +87,12 @@ pm2go l     # PM2-style shortcut
 # Stop an application
 pm2go stop my-app
 
-# Delete an application
+# View logs
+pm2go logs my-app       # Show recent logs
+pm2go logs my-app -f    # Follow logs in real-time
+pm2go logs -l 100       # Show last 100 lines for all apps
+
+# Delete an application  
 pm2go delete my-app
 ```
 
@@ -101,6 +106,7 @@ pm2go delete my-app
 | `pm2go stop <name>` | | Stop an application |
 | `pm2go delete <name>` | `del` | Delete an application |
 | `pm2go list` | `ls`, `l` | List all applications |
+| `pm2go logs [name]` | | Show application logs |
 
 ### Advanced Commands
 
@@ -110,14 +116,24 @@ pm2go delete my-app
 | `pm2go flush [name]` | Clear logs (all or specific app) |
 | `pm2go jlist` | List applications in JSON format |
 
-### Start Command Options
+### Command Options
 
+#### Start Command
 ```bash
 pm2go start <script> [options]
 
 Options:
   -n, --name string     Application name
   -e, --env strings     Environment variables (KEY=VALUE)
+```
+
+#### Logs Command
+```bash
+pm2go logs [name] [options]
+
+Options:
+  -f, --follow          Follow log output (like tail -f)
+  -l, --lines int       Number of lines to display (default 50)
 ```
 
 ## Examples
@@ -133,6 +149,15 @@ pm2go start app.py --name worker --env DEBUG=true --env WORKERS=4
 
 # Start multiple apps from ecosystem file
 pm2go start ecosystem.json
+
+# View logs for specific application
+pm2go logs api
+
+# Follow logs in real-time
+pm2go logs worker --follow
+
+# Show last 200 lines for all applications
+pm2go logs --lines 200
 ```
 
 ### Ecosystem File Example
@@ -310,7 +335,8 @@ pm2go list
 systemctl --user list-units "pm2-*"
 
 # View logs
-journalctl --user -u pm2-app-name -f
+pm2go logs app-name
+pm2go logs app-name -f
 ```
 
 ## Log Management
@@ -319,14 +345,24 @@ PM2go uses systemd's journald for centralized logging:
 
 ### View Logs
 
+PM2go provides a convenient logs command that uses systemd's journald:
+
 ```bash
 # View logs for specific app
+pm2go logs my-app
+
+# Follow logs in real-time
+pm2go logs my-app -f
+
+# View all application logs
+pm2go logs
+
+# Show last 100 lines
+pm2go logs my-app -l 100
+
+# Advanced: Direct journalctl access
 journalctl --user -u pm2-my-app -f
-
-# View all PM2go logs
 journalctl --user -u "pm2-*" -f
-
-# View logs from specific time
 journalctl --user -u pm2-my-app --since "1 hour ago"
 ```
 

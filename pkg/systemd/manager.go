@@ -281,3 +281,41 @@ func (m *Manager) mapSystemdStatus(status string) string {
 		return "unknown"
 	}
 }
+
+// Logs shows logs for a specific app or all apps
+func (m *Manager) Logs(appName string, lines int, follow bool) error {
+	cmd := []string{"journalctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+
+	if appName != "" {
+		// Show logs for specific app
+		serviceName := m.serviceName(appName)
+		cmd = append(cmd, "--unit", serviceName)
+	} else {
+		// Show logs for all PM2go services
+		cmd = append(cmd, "--unit", m.prefix+"*")
+	}
+
+	// Add line limit
+	if lines > 0 {
+		cmd = append(cmd, "--lines", fmt.Sprintf("%d", lines))
+	}
+
+	// Add follow flag
+	if follow {
+		cmd = append(cmd, "--follow")
+	}
+
+	// Add other useful flags
+	cmd = append(cmd, "--no-pager", "--output", "short")
+
+	// Execute journalctl and connect to stdout/stderr
+	execCmd := exec.Command(cmd[0], cmd[1:]...)
+	execCmd.Stdout = os.Stdout
+	execCmd.Stderr = os.Stderr
+	execCmd.Stdin = os.Stdin
+
+	return execCmd.Run()
+}
