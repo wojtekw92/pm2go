@@ -24,23 +24,7 @@ type VMTestSuite struct {
 	testDir   string
 }
 
-// PM2Process represents a process in PM2go output
-type PM2Process struct {
-	PID    int    `json:"pid"`
-	Name   string `json:"name"`
-	PM2Env struct {
-		Name        string `json:"name"`
-		ExecMode    string `json:"exec_mode"`
-		Status      string `json:"status"`
-		PMUptime    int64  `json:"pm_uptime"`
-		CreatedAt   int64  `json:"created_at"`
-		RestartTime int    `json:"restart_time"`
-	} `json:"pm2_env"`
-	Monit struct {
-		Memory int `json:"memory"`
-		CPU    int `json:"cpu"`
-	} `json:"monit"`
-}
+// PM2Process struct is already declared in e2e_test.go
 
 // SetupSuite runs before all tests
 func (suite *VMTestSuite) SetupSuite() {
