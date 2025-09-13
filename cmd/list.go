@@ -93,7 +93,12 @@ func formatMemory(bytes int) string {
 		exp++
 	}
 	
-	result := float64(bytes) / float64(1<<uint(10*exp))
+	divisor := 1
+	for i := 0; i < exp; i++ {
+		divisor *= 1024
+	}
+	
+	result := float64(bytes) / float64(divisor)
 	units := []string{"b", "kb", "mb", "gb"}
 	
 	if result >= 100 {
