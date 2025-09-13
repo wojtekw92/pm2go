@@ -80,8 +80,56 @@ func (m *Manager) getNextAvailableID() int {
 	return maxID + 1
 }
 
+// findServiceByIdentifier finds service name by ID or name
+func (m *Manager) findServiceByIdentifier(identifier string) (string, error) {
+	processes, err := m.List()
+	if err != nil {
+		return "", err
+	}
+	
+	// Try to parse as ID first
+	if id, err := strconv.Atoi(identifier); err == nil {
+		for _, process := range processes {
+			if process.PM2Env.ID == id {
+				return m.serviceNameWithID(process.PM2Env.ID, process.Name), nil
+			}
+		}
+		return "", fmt.Errorf("process with ID %d not found", id)
+	}
+	
+	// Try as name
+	for _, process := range processes {
+		if process.Name == identifier {
+			return m.serviceNameWithID(process.PM2Env.ID, process.Name), nil
+		}
+	}
+	
+	return "", fmt.Errorf("process '%s' not found", identifier)
+}
+
+// checkDuplicateName checks if a name already exists
+func (m *Manager) checkDuplicateName(name string) error {
+	processes, err := m.List()
+	if err != nil {
+		return err
+	}
+	
+	for _, process := range processes {
+		if process.Name == name {
+			return fmt.Errorf("process with name '%s' already exists (ID: %d)", name, process.PM2Env.ID)
+		}
+	}
+	
+	return nil
+}
+
 // Start creates and starts a systemd service for the given app config
 func (m *Manager) Start(config AppConfig) error {
+	// Check for duplicate names
+	if err := m.checkDuplicateName(config.Name); err != nil {
+		return err
+	}
+	
 	// Assign ID if not set
 	if config.ID == 0 {
 		config.ID = m.getNextAvailableID()
@@ -117,14 +165,25 @@ func (m *Manager) Start(config AppConfig) error {
 }
 
 // Stop stops a systemd service
-func (m *Manager) Stop(appName string) error {
-	serviceName := m.serviceName(appName)
+func (m *Manager) Stop(identifier string) error {
+	serviceName, err := m.findServiceByIdentifier(identifier)
+	if err != nil {
+		return err
+	}
 	return m.systemdCommand("stop", serviceName)
 }
 
 // Delete stops and removes a systemd service
-func (m *Manager) Delete(appName string) error {
-	serviceName := m.serviceName(appName)
+func (m *Manager) Delete(identifier string) error {
+	if identifier == "all" {
+		return m.deleteAll()
+	}
+	
+	// Find service by name or ID
+	serviceName, err := m.findServiceByIdentifier(identifier)
+	if err != nil {
+		return err
+	}
 
 	// Stop service first
 	m.systemdCommand("stop", serviceName)
@@ -135,6 +194,26 @@ func (m *Manager) Delete(appName string) error {
 	servicePath := filepath.Join(serviceDir, serviceName+".service")
 	os.Remove(servicePath)
 
+	return m.systemdReload()
+}
+
+// deleteAll removes all pm2go managed services
+func (m *Manager) deleteAll() error {
+	processes, err := m.List()
+	if err != nil {
+		return err
+	}
+	
+	for _, process := range processes {
+		serviceName := m.serviceNameWithID(process.PM2Env.ID, process.Name)
+		m.systemdCommand("stop", serviceName)
+		m.systemdCommand("disable", serviceName)
+		
+		serviceDir := m.getServiceDir()
+		servicePath := filepath.Join(serviceDir, serviceName+".service")
+		os.Remove(servicePath)
+	}
+	
 	return m.systemdReload()
 }
 
