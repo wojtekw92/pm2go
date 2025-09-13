@@ -25,15 +25,15 @@ func handleList() {
 	}
 
 	// Print PM2-style table
-	fmt.Println("┌─────┬──────────────────┬─────────┬─────────┬─────────┬─────────┬─────────┬──────────┐")
-	fmt.Println("│ id  │ name             │ pid     │ status  │ restart │ uptime  │ ↺       │ memory   │")
-	fmt.Println("├─────┼──────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────┤")
+	fmt.Println("┌─────┬──────────────────┬─────────┬─────────┬─────────┬─────────┬─────────┬──────────┬─────────┐")
+	fmt.Println("│ id  │ name             │ pid     │ status  │ restart │ uptime  │ ↺       │ memory   │ cpu     │")
+	fmt.Println("├─────┼──────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────┼─────────┤")
 
 	for _, process := range processes {
 		uptime := formatUptime(process.PM2Env.PMUptime)
 		memory := formatMemory(process.Monit.Memory)
 		
-		fmt.Printf("│ %-3d │ %-16s │ %-7d │ %-7s │ %-7d │ %-7s │ %-7d │ %-8s │\n",
+		fmt.Printf("│ %-3d │ %-16s │ %-7d │ %-7s │ %-7d │ %-7s │ %-7d │ %-8s │ %-7s │\n",
 			process.PM2Env.ID, 
 			truncateString(process.Name, 16), 
 			process.PID,
@@ -41,9 +41,10 @@ func handleList() {
 			process.PM2Env.RestartTime,
 			uptime,
 			process.PM2Env.RestartTime, 
-			memory)
+			memory,
+			fmt.Sprintf("%d%%", process.Monit.CPU))
 	}
-	fmt.Println("└─────┴──────────────────┴─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘")
+	fmt.Println("└─────┴──────────────────┴─────────┴─────────┴─────────┴─────────┴─────────┴──────────┴─────────┘")
 }
 
 func truncateString(s string, maxLen int) string {
