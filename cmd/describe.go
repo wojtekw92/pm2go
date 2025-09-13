@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -73,40 +74,32 @@ func handleDescribe(identifier string) {
 	
 	// Display detailed information
 	fmt.Printf("Describing process with id %d - name %s\n", targetProcess.PM2Env.ID, targetProcess.Name)
-	fmt.Println("┌─────────────────────────────────────────────────────────────┐")
-	fmt.Printf("│ status             │ %-39s │\n", targetProcess.PM2Env.Status)
-	fmt.Printf("│ name               │ %-39s │\n", targetProcess.Name)
-	fmt.Printf("│ id                 │ %-39d │\n", targetProcess.PM2Env.ID)
-	fmt.Printf("│ pid                │ %-39d │\n", targetProcess.PID)
-	fmt.Printf("│ interpreter        │ %-39s │\n", getInterpreter(targetProcess))
-	fmt.Printf("│ script             │ %-39s │\n", targetProcess.PM2Env.PMExecPath)
-	fmt.Printf("│ args               │ %-39s │\n", getArgs(targetProcess))
-	fmt.Printf("│ restart time       │ %-39d │\n", targetProcess.PM2Env.RestartTime)
-	fmt.Printf("│ uptime             │ %-39s │\n", formatUptime(targetProcess.PM2Env.PMUptime))
-	fmt.Printf("│ memory usage       │ %-39s │\n", formatMemory(targetProcess.Monit.Memory))
-	fmt.Printf("│ cpu usage          │ %-39d%% │\n", targetProcess.Monit.CPU)
-	fmt.Println("├─────────────────────────────────────────────────────────────┤")
-	fmt.Printf("│ script path        │ %-39s │\n", targetProcess.PM2Env.PMExecPath)
-	fmt.Printf("│ script args        │ %-39s │\n", getArgs(targetProcess))
-	fmt.Printf("│ error log path     │ %-39s │\n", targetProcess.PM2Env.PMErrLogPath)
-	fmt.Printf("│ out log path       │ %-39s │\n", targetProcess.PM2Env.PMOutLogPath)
-	fmt.Printf("│ pid path           │ %-39s │\n", targetProcess.PM2Env.PMPidPath)
-	fmt.Println("├─────────────────────────────────────────────────────────────┤")
-	fmt.Printf("│ exec interpreter   │ %-39s │\n", getInterpreter(targetProcess))
-	fmt.Printf("│ exec mode          │ %-39s │\n", "fork_mode")
-	fmt.Printf("│ node.js version    │ %-39s │\n", "N/A")
-	fmt.Printf("│ watch & reload     │ %-39s │\n", "✘")
-	fmt.Printf("│ unstable restarts  │ %-39d │\n", 0)
-	fmt.Printf("│ created at         │ %-39s │\n", formatTimestamp(targetProcess.PM2Env.CreatedAt))
-	fmt.Println("└─────────────────────────────────────────────────────────────┘")
+	fmt.Println("┌───────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐")
+	fmt.Printf("│ %-17s │ %-88s │\n", "status", targetProcess.PM2Env.Status)
+	fmt.Printf("│ %-17s │ %-88s │\n", "name", targetProcess.Name)
+	fmt.Printf("│ %-17s │ %-88s │\n", "namespace", "default")
+	fmt.Printf("│ %-17s │ %-88s │\n", "version", "N/A")
+	fmt.Printf("│ %-17s │ %-88d │\n", "restarts", targetProcess.PM2Env.RestartTime)
+	fmt.Printf("│ %-17s │ %-88s │\n", "uptime", formatUptime(targetProcess.PM2Env.PMUptime))
+	fmt.Printf("│ %-17s │ %-88s │\n", "script path", truncateField(targetProcess.PM2Env.Interpreter, 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "script args", truncateField(getScriptWithArgs(targetProcess), 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "error log path", truncateField(targetProcess.PM2Env.PMErrLogPath, 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "out log path", truncateField(targetProcess.PM2Env.PMOutLogPath, 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "pid path", truncateField(targetProcess.PM2Env.PMPidPath, 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "interpreter", getInterpreterName(targetProcess))
+	fmt.Printf("│ %-17s │ %-88s │\n", "interpreter args", "N/A")
+	fmt.Printf("│ %-17s │ %-88d │\n", "script id", targetProcess.PM2Env.ID)
+	fmt.Printf("│ %-17s │ %-88s │\n", "exec cwd", truncateField(getCurrentWorkingDir(), 88))
+	fmt.Printf("│ %-17s │ %-88s │\n", "exec mode", "fork_mode")
+	fmt.Printf("│ %-17s │ %-88s │\n", "node.js version", "N/A")
+	fmt.Printf("│ %-17s │ %-88s │\n", "node env", "N/A")
+	fmt.Printf("│ %-17s │ %-88s │\n", "watch & reload", "✘")
+	fmt.Printf("│ %-17s │ %-88d │\n", "unstable restarts", targetProcess.PM2Env.UnstableRestarts)
+	fmt.Printf("│ %-17s │ %-88s │\n", "created at", formatTimestamp(targetProcess.PM2Env.CreatedAt))
+	fmt.Println("└───────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘")
 	
-	// Environment variables section
-	if len(targetProcess.PM2Env.Env) > 0 {
-		fmt.Println("\nEnvironment:")
-		for key, value := range targetProcess.PM2Env.Env {
-			fmt.Printf("  %s: %s\n", key, value)
-		}
-	}
+	// Show divergent environment variables
+	showDivergentEnvVars(targetProcess.PM2Env.Env)
 }
 
 func getInterpreter(process *systemd.ProcessInfo) string {
@@ -129,5 +122,73 @@ func formatTimestamp(timestamp int64) string {
 	}
 	// Convert from milliseconds to time and format
 	t := time.Unix(timestamp/1000, 0)
-	return t.Format("2006-01-02 15:04:05")
+	return t.Format("2006-01-02T15:04:05.000Z")
+}
+
+func truncateField(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func getScriptWithArgs(process *systemd.ProcessInfo) string {
+	script := process.PM2Env.PMExecPath
+	args := getArgs(process)
+	if args != "N/A" && args != "" {
+		return script + " " + args
+	}
+	return script
+}
+
+func getInterpreterName(process *systemd.ProcessInfo) string {
+	if process.PM2Env.Interpreter == "" {
+		return "none"
+	}
+	// Extract just the interpreter name from the full path
+	interpreter := process.PM2Env.Interpreter
+	if lastSlash := strings.LastIndex(interpreter, "/"); lastSlash != -1 {
+		return interpreter[lastSlash+1:]
+	}
+	return interpreter
+}
+
+func getCurrentWorkingDir() string {
+	if cwd, err := os.Getwd(); err == nil {
+		return cwd
+	}
+	return "N/A"
+}
+
+func showDivergentEnvVars(processEnv map[string]string) {
+	// Get current environment
+	currentEnv := make(map[string]string)
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		if len(parts) == 2 {
+			currentEnv[parts[0]] = parts[1]
+		}
+	}
+	
+	// Find divergent variables
+	var divergent [][]string
+	for key, processValue := range processEnv {
+		currentValue, exists := currentEnv[key]
+		if !exists || currentValue != processValue {
+			divergent = append(divergent, []string{key, processValue})
+		}
+	}
+	
+	if len(divergent) > 0 {
+		fmt.Println("Divergent env variables from local env")
+		fmt.Println("┌──────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐")
+		
+		for _, pair := range divergent {
+			key := pair[0]
+			value := pair[1]
+			fmt.Printf("│ %-16s │ %-99s │\n", truncateField(key, 16), truncateField(value, 99))
+		}
+		
+		fmt.Println("└──────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘")
+	}
 }
