@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/spf13/cobra"
 )
@@ -37,7 +38,38 @@ func init() {
 	logsCmd.Flags().BoolP("follow", "f", false, "Follow log output (like tail -f)")
 }
 
-func handleLogs(appName string, lines int, follow bool) {
+func handleLogs(identifier string, lines int, follow bool) {
+	var appName string
+	
+	if identifier != "" {
+		// Try to resolve ID to app name
+		if id, err := strconv.Atoi(identifier); err == nil {
+			// It's a numeric ID
+			processes, err := manager.List()
+			if err != nil {
+				fmt.Printf("Error getting process list: %v\n", err)
+				os.Exit(1)
+			}
+			
+			found := false
+			for _, process := range processes {
+				if process.PM2Env.ID == id {
+					appName = process.Name
+					found = true
+					break
+				}
+			}
+			
+			if !found {
+				fmt.Printf("Error: Process with ID %d not found\n", id)
+				os.Exit(1)
+			}
+		} else {
+			// It's an app name
+			appName = identifier
+		}
+	}
+	
 	if err := manager.Logs(appName, lines, follow); err != nil {
 		fmt.Printf("Error showing logs: %v\n", err)
 		os.Exit(1)

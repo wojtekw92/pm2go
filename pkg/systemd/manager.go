@@ -252,8 +252,9 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 		// Get PID for the service (will be 0 if stopped)
 		pid := m.getServicePID(serviceName)
 		
-		// Get memory usage and uptime (will be 0 if stopped)
+		// Get memory usage, CPU, and uptime (will be 0 if stopped)
 		memory := m.getServiceMemory(pid)
+		cpu := m.getServiceCPU(pid)
 		uptime := m.getServiceUptime(serviceName)
 		createdAt := time.Now().Unix()*1000 - uptime
 
@@ -276,7 +277,7 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 			},
 			Monit: PM2Monit{
 				Memory: memory,
-				CPU:    0, // CPU usage calculation is complex, leaving as 0 for now
+				CPU:    cpu,
 			},
 		}
 		processes = append(processes, process)
@@ -531,6 +532,69 @@ func (m *Manager) getServiceMemory(pid int) int {
 		}
 	}
 	return 0
+}
+
+// getServiceCPU returns CPU usage percentage for a given PID
+func (m *Manager) getServiceCPU(pid int) int {
+	if pid == 0 {
+		return 0
+	}
+	
+	// Read CPU stats from /proc/PID/stat
+	statFile := fmt.Sprintf("/proc/%d/stat", pid)
+	content, err := os.ReadFile(statFile)
+	if err != nil {
+		return 0
+	}
+	
+	fields := strings.Fields(string(content))
+	if len(fields) < 22 {
+		return 0
+	}
+	
+	// Get process CPU times (user + system time)
+	utime, err1 := strconv.ParseInt(fields[13], 10, 64)  // user time
+	stime, err2 := strconv.ParseInt(fields[14], 10, 64)  // system time
+	starttime, err3 := strconv.ParseInt(fields[21], 10, 64) // process start time
+	
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0
+	}
+	
+	// Get system uptime to calculate process uptime
+	uptimeContent, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	
+	uptimeFields := strings.Fields(string(uptimeContent))
+	if len(uptimeFields) < 1 {
+		return 0
+	}
+	
+	uptime, err := strconv.ParseFloat(uptimeFields[0], 64)
+	if err != nil {
+		return 0
+	}
+	
+	// Calculate CPU usage
+	// Clock ticks per second (usually 100)
+	clockTicks := 100.0
+	totalTime := float64(utime + stime)
+	processUptime := uptime - (float64(starttime) / clockTicks)
+	
+	if processUptime <= 0 {
+		return 0
+	}
+	
+	cpuUsage := (totalTime / clockTicks / processUptime) * 100
+	
+	// Round and cap at 100%
+	if cpuUsage > 100 {
+		cpuUsage = 100
+	}
+	
+	return int(cpuUsage + 0.5) // Round to nearest integer
 }
 
 // getServiceUptime returns uptime in milliseconds for a service
