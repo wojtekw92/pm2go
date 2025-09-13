@@ -336,7 +336,10 @@ func (m *Manager) readServiceConfig(serviceName string) ServiceConfig {
 			if strings.Contains(envLine, "=") {
 				parts := strings.SplitN(envLine, "=", 2)
 				if len(parts) == 2 {
-					config.Env[parts[0]] = strings.Trim(parts[1], "\"")
+					// Remove quotes and unescape quoted quotes
+					value := strings.Trim(parts[1], "\"")
+					value = strings.ReplaceAll(value, "\\\"", "\"")
+					config.Env[parts[0]] = value
 				}
 			}
 		} else if strings.HasPrefix(line, "StandardOutput=") {
@@ -490,7 +493,9 @@ WantedBy=default.target
 	if config.Env != nil {
 		envLines := ""
 		for key, value := range config.Env {
-			envLines += fmt.Sprintf("Environment=%s=%s\n", key, value)
+			// Quote the value to handle spaces and special characters
+			quotedValue := fmt.Sprintf("\"%s\"", strings.ReplaceAll(value, "\"", "\\\""))
+			envLines += fmt.Sprintf("Environment=%s=%s\n", key, quotedValue)
 		}
 		service = strings.Replace(service, "[Install]", envLines+"\n[Install]", 1)
 	}
