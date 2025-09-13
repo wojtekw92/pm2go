@@ -179,7 +179,7 @@ func (m *Manager) Restart(id int) error {
 	if err != nil {
 		return err
 	}
-	return m.systemdCommand("start", serviceName)
+	return m.systemdCommand("restart", serviceName)
 }
 
 // Delete stops and removes a systemd service

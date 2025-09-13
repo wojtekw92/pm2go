@@ -89,7 +89,7 @@ func handleStart(args []string, name string, envVars []string) {
 	if len(args) == 1 {
 		if id, err := strconv.Atoi(args[0]); err == nil {
 			// It's a numeric ID - restart existing process
-			handleRestart(id)
+			handleStartRestart(id)
 			return
 		}
 		
@@ -176,7 +176,7 @@ func handleStart(args []string, name string, envVars []string) {
 	fmt.Printf("✓ Started %s\n", name)
 }
 
-func handleRestart(id int) {
+func handleStartRestart(id int) {
 	// Find the process by ID to get its name
 	processes, err := manager.List()
 	if err != nil {
