@@ -219,65 +219,58 @@ func (m *Manager) deleteAll() error {
 
 // List returns a list of all managed processes
 func (m *Manager) List() ([]ProcessInfo, error) {
-	cmd := []string{"systemctl"}
-	if m.userMode {
-		cmd = append(cmd, "--user")
-	}
-	cmd = append(cmd, "list-units", m.prefix+"*", "--no-pager")
-
-	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	// Get all service files instead of just active units
+	serviceDir := m.getServiceDir()
+	files, err := filepath.Glob(filepath.Join(serviceDir, m.prefix+"*.service"))
 	if err != nil {
 		return nil, err
 	}
 
 	var processes []ProcessInfo
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, m.prefix) && strings.Contains(line, ".service") {
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				serviceName := parts[0]
-				status := parts[2]
+	for _, filePath := range files {
+		fileName := filepath.Base(filePath)
+		serviceName := strings.TrimSuffix(fileName, ".service")
 
-				// Parse ID and name from service name
-				id, appName, err := m.parseServiceName(serviceName)
-				if err != nil {
-					continue // Skip invalid service names
-				}
-
-				// Get PID for the service
-				pid := m.getServicePID(serviceName)
-				
-				// Get memory usage and uptime
-				memory := m.getServiceMemory(pid)
-				uptime := m.getServiceUptime(serviceName)
-				createdAt := time.Now().Unix()*1000 - uptime
-
-				process := ProcessInfo{
-					PID:  pid,
-					Name: appName,
-					PM2Env: PM2Env{
-						ID:               id,
-						Name:             appName,
-						ExecMode:         "fork",
-						Status:           m.mapSystemdStatus(status),
-						PMUptime:         uptime,
-						CreatedAt:        createdAt,
-						RestartTime:      0,
-						UnstableRestarts: 0,
-						Versioning:       nil,
-						Node: PM2Node{
-							Version: "unknown",
-						},
-					},
-					Monit: PM2Monit{
-						Memory: memory,
-						CPU:    0, // CPU usage calculation is complex, leaving as 0 for now
-					},
-				}
-				processes = append(processes, process)
-			}
+		// Parse ID and name from service name
+		id, appName, err := m.parseServiceName(serviceName)
+		if err != nil {
+			continue // Skip invalid service names
 		}
+
+		// Get service status
+		status := m.getServiceStatus(serviceName)
+
+		// Get PID for the service (will be 0 if stopped)
+		pid := m.getServicePID(serviceName)
+		
+		// Get memory usage and uptime (will be 0 if stopped)
+		memory := m.getServiceMemory(pid)
+		uptime := m.getServiceUptime(serviceName)
+		createdAt := time.Now().Unix()*1000 - uptime
+
+		process := ProcessInfo{
+			PID:  pid,
+			Name: appName,
+			PM2Env: PM2Env{
+				ID:               id,
+				Name:             appName,
+				ExecMode:         "fork",
+				Status:           status,
+				PMUptime:         uptime,
+				CreatedAt:        createdAt,
+				RestartTime:      0,
+				UnstableRestarts: 0,
+				Versioning:       nil,
+				Node: PM2Node{
+					Version: "unknown",
+				},
+			},
+			Monit: PM2Monit{
+				Memory: memory,
+				CPU:    0, // CPU usage calculation is complex, leaving as 0 for now
+			},
+		}
+		processes = append(processes, process)
 	}
 
 	return processes, nil
@@ -483,6 +476,24 @@ func (m *Manager) getServicePID(serviceName string) int {
 		return 0
 	}
 	return pid
+}
+
+// getServiceStatus returns the status of a service
+func (m *Manager) getServiceStatus(serviceName string) string {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "is-active", serviceName)
+
+	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	if err != nil {
+		// Check if service is loaded but not active
+		return "stopped"
+	}
+
+	status := strings.TrimSpace(string(output))
+	return m.mapSystemdStatus(status)
 }
 
 // getServiceMemory returns memory usage in bytes for a given PID
