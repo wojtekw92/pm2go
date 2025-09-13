@@ -12,19 +12,77 @@ import (
 )
 
 var startCmd = &cobra.Command{
-	Use:   "start [interpreter] -- [script] [args...] | start [script|ecosystem.json]",
-	Short: "Start an application or ecosystem",
-	Args:  cobra.MinimumNArgs(1),
+	Use:                "start [interpreter] -- [script] [args...] | start [script|ecosystem.json]",
+	Short:              "Start an application or ecosystem",
+	Args:               cobra.MinimumNArgs(1),
+	DisableFlagParsing: false,
 	Run: func(cmd *cobra.Command, args []string) {
 		name, _ := cmd.Flags().GetString("name")
 		envVars, _ := cmd.Flags().GetStringSlice("env")
-		handleStart(args, name, envVars)
+		
+		// Parse os.Args to properly handle "--" separator that Cobra consumes
+		rawArgs := parseRawArgs()
+		fmt.Printf("DEBUG: Raw args from os.Args: %v\n", rawArgs)
+		
+		handleStart(rawArgs, name, envVars)
 	},
 }
 
 func init() {
 	startCmd.Flags().StringP("name", "n", "", "Application name")
 	startCmd.Flags().StringSliceP("env", "e", []string{}, "Environment variables (KEY=VALUE)")
+}
+
+// parseRawArgs extracts the arguments for "start" command from os.Args, preserving "--"
+func parseRawArgs() []string {
+	args := os.Args
+	startIndex := -1
+	
+	// Find "start" command
+	for i, arg := range args {
+		if arg == "start" {
+			startIndex = i
+			break
+		}
+	}
+	
+	if startIndex == -1 || startIndex >= len(args)-1 {
+		return []string{}
+	}
+	
+	// Extract arguments after "start", skipping flags
+	var result []string
+	for i := startIndex + 1; i < len(args); i++ {
+		arg := args[i]
+		// Skip flags and their values
+		if strings.HasPrefix(arg, "--name") || strings.HasPrefix(arg, "-n") {
+			if strings.Contains(arg, "=") {
+				// --name=value format, skip just this arg
+				continue
+			} else {
+				// --name value format, skip this arg and next
+				if i+1 < len(args) {
+					i++ // skip the value
+				}
+				continue
+			}
+		}
+		if strings.HasPrefix(arg, "--env") || strings.HasPrefix(arg, "-e") {
+			if strings.Contains(arg, "=") {
+				// --env=value format, skip just this arg
+				continue
+			} else {
+				// --env value format, skip this arg and next
+				if i+1 < len(args) {
+					i++ // skip the value
+				}
+				continue
+			}
+		}
+		result = append(result, arg)
+	}
+	
+	return result
 }
 
 func handleStart(args []string, name string, envVars []string) {
