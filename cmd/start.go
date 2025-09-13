@@ -28,6 +28,8 @@ func init() {
 }
 
 func handleStart(args []string, name string, envVars []string) {
+	fmt.Printf("DEBUG: Raw args: %v\n", args)
+	
 	// Check if it's an ecosystem file (single argument)
 	if len(args) == 1 && (strings.HasSuffix(args[0], ".json") || strings.Contains(args[0], "ecosystem")) {
 		handleEcosystemStart(args[0])
@@ -74,6 +76,7 @@ func handleStart(args []string, name string, envVars []string) {
 			if len(args) > separatorIndex+2 {
 				config.Args = strings.Join(args[separatorIndex+2:], " ")
 			}
+			fmt.Printf("DEBUG: Parsed - Interpreter: '%s', Script: '%s', Args: '%s'\n", config.Interpreter, config.Script, config.Args)
 		}
 	}
 
