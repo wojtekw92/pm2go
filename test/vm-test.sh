@@ -46,7 +46,7 @@ cp "$PROJECT_ROOT"/test/fixtures/* "$TEST_DIR/"
 cp "$PROJECT_ROOT"/pm2go "$TEST_DIR/"
 
 # Update ecosystem.json to use correct test directory paths
-sed -i "s|/home/ubuntu/apps|$TEST_DIR|g" "$TEST_DIR/ecosystem.json"
+sed -i 's|/home/ubuntu/apps|'"$TEST_DIR"'|g' "$TEST_DIR/ecosystem.json"
 
 echo "Test environment setup complete."
 echo "Test directory: $TEST_DIR"
