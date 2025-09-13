@@ -713,38 +713,110 @@ func (m *Manager) mapSystemdStatus(status string) string {
 
 // Logs shows logs for a specific app or all apps
 func (m *Manager) Logs(appName string, lines int, follow bool) error {
-	cmd := []string{"journalctl"}
-	if m.userMode {
-		cmd = append(cmd, "--user")
-	}
-
 	if appName != "" {
-		// Show logs for specific app
-		serviceName := m.serviceName(appName)
-		cmd = append(cmd, "--unit", serviceName)
+		// Show logs for specific app from PM2-style log files
+		return m.showAppLogs(appName, lines, follow)
 	} else {
-		// Show logs for all PM2go services
-		cmd = append(cmd, "--unit", m.prefix+"*")
+		// Show logs for all PM2go apps
+		return m.showAllAppLogs(lines, follow)
 	}
+}
 
-	// Add line limit
+func (m *Manager) showAppLogs(appName string, lines int, follow bool) error {
+	// Find the process to get log file paths
+	processes, err := m.List()
+	if err != nil {
+		return fmt.Errorf("failed to get process list: %v", err)
+	}
+	
+	var targetProcess *ProcessInfo
+	for _, process := range processes {
+		if process.Name == appName {
+			targetProcess = &process
+			break
+		}
+	}
+	
+	if targetProcess == nil {
+		return fmt.Errorf("process '%s' not found", appName)
+	}
+	
+	// Get log file paths
+	outLogPath := targetProcess.PM2Env.PMOutLogPath
+	errLogPath := targetProcess.PM2Env.PMErrLogPath
+	
+	if outLogPath == "" || errLogPath == "" {
+		return fmt.Errorf("log paths not configured for process '%s'", appName)
+	}
+	
+	// Use tail to show logs
+	cmd := []string{"tail"}
+	
 	if lines > 0 {
-		cmd = append(cmd, "--lines", fmt.Sprintf("%d", lines))
+		cmd = append(cmd, "-n", fmt.Sprintf("%d", lines))
 	}
-
-	// Add follow flag
+	
 	if follow {
-		cmd = append(cmd, "--follow")
+		cmd = append(cmd, "-f")
 	}
-
-	// Add other useful flags
-	cmd = append(cmd, "--no-pager", "--output", "short")
-
-	// Execute journalctl and connect to stdout/stderr
+	
+	// Show both stdout and stderr
+	cmd = append(cmd, outLogPath, errLogPath)
+	
+	// Execute tail command
 	execCmd := exec.Command(cmd[0], cmd[1:]...)
 	execCmd.Stdout = os.Stdout
 	execCmd.Stderr = os.Stderr
 	execCmd.Stdin = os.Stdin
+	
+	return execCmd.Run()
+}
 
+func (m *Manager) showAllAppLogs(lines int, follow bool) error {
+	// Get all processes
+	processes, err := m.List()
+	if err != nil {
+		return fmt.Errorf("failed to get process list: %v", err)
+	}
+	
+	if len(processes) == 0 {
+		fmt.Println("No processes found")
+		return nil
+	}
+	
+	// Collect all log file paths
+	var logFiles []string
+	for _, process := range processes {
+		if process.PM2Env.PMOutLogPath != "" {
+			logFiles = append(logFiles, process.PM2Env.PMOutLogPath)
+		}
+		if process.PM2Env.PMErrLogPath != "" {
+			logFiles = append(logFiles, process.PM2Env.PMErrLogPath)
+		}
+	}
+	
+	if len(logFiles) == 0 {
+		return fmt.Errorf("no log files found")
+	}
+	
+	// Use tail to show logs from all files
+	cmd := []string{"tail"}
+	
+	if lines > 0 {
+		cmd = append(cmd, "-n", fmt.Sprintf("%d", lines))
+	}
+	
+	if follow {
+		cmd = append(cmd, "-f")
+	}
+	
+	cmd = append(cmd, logFiles...)
+	
+	// Execute tail command
+	execCmd := exec.Command(cmd[0], cmd[1:]...)
+	execCmd.Stdout = os.Stdout
+	execCmd.Stderr = os.Stderr
+	execCmd.Stdin = os.Stdin
+	
 	return execCmd.Run()
 }
