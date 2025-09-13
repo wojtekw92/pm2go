@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -84,10 +85,19 @@ func parseRawArgs() []string {
 }
 
 func handleStart(args []string, name string, envVars []string) {
-	// Check if it's an ecosystem file (single argument)
-	if len(args) == 1 && (strings.HasSuffix(args[0], ".json") || strings.Contains(args[0], "ecosystem")) {
-		handleEcosystemStart(args[0])
-		return
+	// Check if we're restarting an existing process by ID
+	if len(args) == 1 {
+		if id, err := strconv.Atoi(args[0]); err == nil {
+			// It's a numeric ID - restart existing process
+			handleRestart(id)
+			return
+		}
+		
+		// Check if it's an ecosystem file
+		if strings.HasSuffix(args[0], ".json") || strings.Contains(args[0], "ecosystem") {
+			handleEcosystemStart(args[0])
+			return
+		}
 	}
 
 	var config systemd.AppConfig
@@ -164,6 +174,42 @@ func handleStart(args []string, name string, envVars []string) {
 	}
 
 	fmt.Printf("✓ Started %s\n", name)
+}
+
+func handleRestart(id int) {
+	// Find the process by ID to get its name
+	processes, err := manager.List()
+	if err != nil {
+		fmt.Printf("Error getting process list: %v\n", err)
+		os.Exit(1)
+	}
+	
+	var targetProcess *systemd.ProcessInfo
+	for i, process := range processes {
+		if process.PM2Env.ID == id {
+			targetProcess = &processes[i]
+			break
+		}
+	}
+	
+	if targetProcess == nil {
+		fmt.Printf("Error: Process with ID %d not found\n", id)
+		os.Exit(1)
+	}
+	
+	// Check if it's already running
+	if targetProcess.PM2Env.Status == "online" {
+		fmt.Printf("Process %d (%s) is already running\n", id, targetProcess.Name)
+		return
+	}
+	
+	// Restart the service
+	if err := manager.Restart(id); err != nil {
+		fmt.Printf("Error restarting %s: %v\n", targetProcess.Name, err)
+		os.Exit(1)
+	}
+	
+	fmt.Printf("✓ Restarted %s (ID: %d)\n", targetProcess.Name, id)
 }
 
 func handleEcosystemStart(filename string) {

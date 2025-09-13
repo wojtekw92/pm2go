@@ -107,7 +107,7 @@ func (m *Manager) findServiceByIdentifier(identifier string) (string, error) {
 	return "", fmt.Errorf("process '%s' not found", identifier)
 }
 
-// checkDuplicateName checks if a name already exists
+// checkDuplicateName checks if a name already exists among running processes
 func (m *Manager) checkDuplicateName(name string) error {
 	processes, err := m.List()
 	if err != nil {
@@ -115,7 +115,7 @@ func (m *Manager) checkDuplicateName(name string) error {
 	}
 	
 	for _, process := range processes {
-		if process.Name == name {
+		if process.Name == name && process.PM2Env.Status != "stopped" {
 			return fmt.Errorf("process with name '%s' already exists (ID: %d)", name, process.PM2Env.ID)
 		}
 	}
@@ -171,6 +171,15 @@ func (m *Manager) Stop(identifier string) error {
 		return err
 	}
 	return m.systemdCommand("stop", serviceName)
+}
+
+// Restart restarts an existing service by ID
+func (m *Manager) Restart(id int) error {
+	serviceName, err := m.findServiceByIdentifier(strconv.Itoa(id))
+	if err != nil {
+		return err
+	}
+	return m.systemdCommand("start", serviceName)
 }
 
 // Delete stops and removes a systemd service
