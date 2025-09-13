@@ -31,6 +31,7 @@ func Execute() {
 	rootCmd.AddCommand(startupCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(describeCmd)
+	rootCmd.AddCommand(envCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
