@@ -257,6 +257,9 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 		cpu := m.getServiceCPU(pid)
 		uptime := m.getServiceUptime(serviceName)
 		createdAt := time.Now().Unix()*1000 - uptime
+		
+		// Read service configuration for additional details
+		config := m.readServiceConfig(serviceName)
 
 		process := ProcessInfo{
 			PID:  pid,
@@ -274,6 +277,13 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 				Node: PM2Node{
 					Version: "unknown",
 				},
+				PMExecPath:   config.Script,
+				PMOutLogPath: config.OutLogPath,
+				PMErrLogPath: config.ErrLogPath,
+				PMPidPath:    config.PidPath,
+				Interpreter:  config.Interpreter,
+				Args:         config.Args,
+				Env:          config.Env,
 			},
 			Monit: PM2Monit{
 				Memory: memory,
@@ -284,6 +294,68 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 	}
 
 	return processes, nil
+}
+
+// readServiceConfig reads and parses a systemd service file to extract configuration
+func (m *Manager) readServiceConfig(serviceName string) ServiceConfig {
+	config := ServiceConfig{
+		Env: make(map[string]string),
+	}
+	
+	serviceDir := m.getServiceDir()
+	filePath := filepath.Join(serviceDir, serviceName+".service")
+	
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return config
+	}
+	
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		
+		if strings.HasPrefix(line, "ExecStart=") {
+			execStart := strings.TrimPrefix(line, "ExecStart=")
+			// Parse the exec command to extract script and interpreter
+			parts := strings.Fields(execStart)
+			if len(parts) > 0 {
+				config.Interpreter = parts[0]
+				if len(parts) > 1 {
+					config.Script = parts[1]
+					if len(parts) > 2 {
+						config.Args = strings.Join(parts[2:], " ")
+					}
+				}
+			}
+		} else if strings.HasPrefix(line, "Environment=") {
+			envLine := strings.TrimPrefix(line, "Environment=")
+			// Parse environment variables
+			if strings.Contains(envLine, "=") {
+				parts := strings.SplitN(envLine, "=", 2)
+				if len(parts) == 2 {
+					config.Env[parts[0]] = strings.Trim(parts[1], "\"")
+				}
+			}
+		} else if strings.HasPrefix(line, "StandardOutput=") {
+			outLine := strings.TrimPrefix(line, "StandardOutput=")
+			if strings.HasPrefix(outLine, "append:") {
+				config.OutLogPath = strings.TrimPrefix(outLine, "append:")
+			}
+		} else if strings.HasPrefix(line, "StandardError=") {
+			errLine := strings.TrimPrefix(line, "StandardError=")
+			if strings.HasPrefix(errLine, "append:") {
+				config.ErrLogPath = strings.TrimPrefix(errLine, "append:")
+			}
+		}
+	}
+	
+	// Generate default PID path
+	config.PidPath = fmt.Sprintf("/tmp/%s.pid", serviceName)
+	
+	return config
 }
 
 // Flush removes logs for all apps or a specific app
