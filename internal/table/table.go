@@ -3,7 +3,13 @@ package table
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 )
+
+// displayWidth returns the display width of a string (number of runes)
+func displayWidth(s string) int {
+	return utf8.RuneCountInString(s)
+}
 
 // Table represents a table with dynamic column sizing
 type Table struct {
@@ -27,7 +33,7 @@ func NewTable(headers ...string) *Table {
 	
 	// Initialize column widths with header lengths
 	for i, header := range headers {
-		t.colWidths[i] = len(header)
+		t.colWidths[i] = displayWidth(header)
 	}
 	
 	return t
@@ -69,7 +75,7 @@ func (t *Table) AddRow(cells ...string) *Table {
 func (t *Table) updateColumnWidths(row []string) {
 	for i, cell := range row {
 		if i < len(t.colWidths) {
-			cellLen := len(cell)
+			cellLen := displayWidth(cell)
 			if cellLen > t.colWidths[i] {
 				if cellLen > t.maxWidth {
 					t.colWidths[i] = t.maxWidth
@@ -90,13 +96,24 @@ func (t *Table) updateColumnWidths(row []string) {
 
 // truncateCell truncates cell content if it exceeds column width
 func (t *Table) truncateCell(content string, width int) string {
-	if len(content) <= width {
+	if displayWidth(content) <= width {
 		return content
 	}
 	if width <= 3 {
-		return content[:width]
+		// For very small widths, just truncate by runes
+		runes := []rune(content)
+		if len(runes) <= width {
+			return content
+		}
+		return string(runes[:width])
 	}
-	return content[:width-3] + "..."
+	
+	// Truncate to fit width-3 runes, then add "..."
+	runes := []rune(content)
+	if len(runes) <= width-3 {
+		return content
+	}
+	return string(runes[:width-3]) + "..."
 }
 
 // Render renders the table as a string
@@ -121,7 +138,7 @@ func (t *Table) Render() string {
 	result.WriteString("│")
 	for i, header := range t.headers {
 		truncated := t.truncateCell(header, t.colWidths[i])
-		padding := t.colWidths[i] - len(truncated)
+		padding := t.colWidths[i] - displayWidth(truncated)
 		result.WriteString(strings.Repeat(" ", t.padding))
 		result.WriteString(truncated)
 		result.WriteString(strings.Repeat(" ", padding+t.padding))
@@ -147,7 +164,7 @@ func (t *Table) Render() string {
 		for i, cell := range row {
 			if i < len(t.colWidths) {
 				truncated := t.truncateCell(cell, t.colWidths[i])
-				padding := t.colWidths[i] - len(truncated)
+				padding := t.colWidths[i] - displayWidth(truncated)
 				result.WriteString(strings.Repeat(" ", t.padding))
 				result.WriteString(truncated)
 				result.WriteString(strings.Repeat(" ", padding+t.padding))

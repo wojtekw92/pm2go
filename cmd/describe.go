@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 	"github.com/wojtekw92/pm2go/internal/table"
@@ -172,21 +173,42 @@ func showDivergentEnvVars(processEnv map[string]string) {
 		}
 	}
 	
-	// Find divergent variables
-	divergentTable := table.NewKeyValueTable().
-		SetKeyWidth(16).
-		SetValueWidth(99)
-	
-	hasDivergent := false
+	// Collect divergent variables first to calculate optimal widths
+	var divergentVars [][]string
 	for key, processValue := range processEnv {
 		currentValue, exists := currentEnv[key]
 		if !exists || currentValue != processValue {
-			divergentTable.AddKeyValue(key, processValue)
-			hasDivergent = true
+			divergentVars = append(divergentVars, []string{key, processValue})
 		}
 	}
 	
-	if hasDivergent {
+	if len(divergentVars) > 0 {
+		// Calculate optimal column widths based on actual divergent variables
+		maxKeyWidth := utf8.RuneCountInString("Key") // Start with header width
+		maxValueWidth := utf8.RuneCountInString("Value") // Start with header width
+		
+		for _, pair := range divergentVars {
+			key := pair[0]
+			value := pair[1]
+			
+			if utf8.RuneCountInString(key) > maxKeyWidth {
+				maxKeyWidth = utf8.RuneCountInString(key)
+			}
+			if utf8.RuneCountInString(value) > maxValueWidth {
+				maxValueWidth = utf8.RuneCountInString(value)
+			}
+		}
+		
+		// Create table with dynamic widths based on content
+		divergentTable := table.NewKeyValueTable().
+			SetKeyWidth(maxKeyWidth).
+			SetValueWidth(maxValueWidth)
+		
+		// Add all divergent variables
+		for _, pair := range divergentVars {
+			divergentTable.AddKeyValue(pair[0], pair[1])
+		}
+		
 		fmt.Println("Divergent env variables from local env")
 		divergentTable.Print()
 	}
