@@ -178,19 +178,32 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 	
 	if config.Interpreter != "" {
 		// Use explicit interpreter: "python3 script.py args"
-		interpreterPath, err := exec.LookPath(strings.Fields(config.Interpreter)[0])
+		interpreterFields := strings.Fields(config.Interpreter)
+		fullPath, err := exec.LookPath(interpreterFields[0])
+		
+		fmt.Printf("DEBUG: Looking for interpreter '%s'\n", interpreterFields[0])
+		fmt.Printf("DEBUG: LookPath result: '%s', error: %v\n", fullPath, err)
+		
+		var interpreterPath string
 		if err != nil {
 			// Fallback to original interpreter if not found in PATH
-			interpreterPath = config.Interpreter
-		} else if len(strings.Fields(config.Interpreter)) > 1 {
-			// Keep additional interpreter args: "python3 -u"
-			interpreterPath = interpreterPath + " " + strings.Join(strings.Fields(config.Interpreter)[1:], " ")
+			interpreterPath = interpreterFields[0]
+			fmt.Printf("DEBUG: Using fallback: %s\n", interpreterPath)
+		} else {
+			interpreterPath = fullPath
+			fmt.Printf("DEBUG: Using full path: %s\n", interpreterPath)
+		}
+		
+		// Add interpreter arguments if any
+		if len(interpreterFields) > 1 {
+			interpreterPath += " " + strings.Join(interpreterFields[1:], " ")
 		}
 		
 		execStart = interpreterPath + " " + config.Script
 		if config.Args != "" {
 			execStart += " " + config.Args
 		}
+		fmt.Printf("DEBUG: Final ExecStart: %s\n", execStart)
 	} else {
 		// Auto-detect interpreter or use script directly
 		if strings.HasSuffix(config.Script, ".py") {
