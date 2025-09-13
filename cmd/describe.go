@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wojtekw92/pm2go/internal/table"
 	"github.com/wojtekw92/pm2go/pkg/systemd"
 )
 
@@ -74,29 +75,36 @@ func handleDescribe(identifier string) {
 	
 	// Display detailed information
 	fmt.Printf("Describing process with id %d - name %s\n", targetProcess.PM2Env.ID, targetProcess.Name)
-	fmt.Println("┌───────────────────┬──────────────────────────────────────────────────────────────────────────────────────────┐")
-	fmt.Printf("│ %-17s │ %-88s │\n", "status", targetProcess.PM2Env.Status)
-	fmt.Printf("│ %-17s │ %-88s │\n", "name", targetProcess.Name)
-	fmt.Printf("│ %-17s │ %-88s │\n", "namespace", "default")
-	fmt.Printf("│ %-17s │ %-88s │\n", "version", "N/A")
-	fmt.Printf("│ %-17s │ %-88d │\n", "restarts", targetProcess.PM2Env.RestartTime)
-	fmt.Printf("│ %-17s │ %-88s │\n", "uptime", formatUptime(targetProcess.PM2Env.PMUptime))
-	fmt.Printf("│ %-17s │ %-88s │\n", "script path", truncateField(targetProcess.PM2Env.Interpreter, 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "script args", truncateField(getScriptWithArgs(targetProcess), 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "error log path", truncateField(targetProcess.PM2Env.PMErrLogPath, 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "out log path", truncateField(targetProcess.PM2Env.PMOutLogPath, 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "pid path", truncateField(targetProcess.PM2Env.PMPidPath, 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "interpreter", getInterpreterName(targetProcess))
-	fmt.Printf("│ %-17s │ %-88s │\n", "interpreter args", "N/A")
-	fmt.Printf("│ %-17s │ %-88d │\n", "script id", targetProcess.PM2Env.ID)
-	fmt.Printf("│ %-17s │ %-88s │\n", "exec cwd", truncateField(getCurrentWorkingDir(), 88))
-	fmt.Printf("│ %-17s │ %-88s │\n", "exec mode", "fork_mode")
-	fmt.Printf("│ %-17s │ %-88s │\n", "node.js version", "N/A")
-	fmt.Printf("│ %-17s │ %-88s │\n", "node env", "N/A")
-	fmt.Printf("│ %-17s │ %-88s │\n", "watch & reload", "✘")
-	fmt.Printf("│ %-17s │ %-88d │\n", "unstable restarts", targetProcess.PM2Env.UnstableRestarts)
-	fmt.Printf("│ %-17s │ %-88s │\n", "created at", formatTimestamp(targetProcess.PM2Env.CreatedAt))
-	fmt.Println("└───────────────────┴──────────────────────────────────────────────────────────────────────────────────────────┘")
+	
+	// Create main info table
+	mainTable := table.NewKeyValueTable().
+		SetKeyWidth(17).
+		SetValueWidth(88)
+	
+	mainTable.
+		AddKeyValue("status", targetProcess.PM2Env.Status).
+		AddKeyValue("name", targetProcess.Name).
+		AddKeyValue("namespace", "default").
+		AddKeyValue("version", "N/A").
+		AddKeyValue("restarts", strconv.Itoa(targetProcess.PM2Env.RestartTime)).
+		AddKeyValue("uptime", formatUptime(targetProcess.PM2Env.PMUptime)).
+		AddKeyValue("script path", targetProcess.PM2Env.Interpreter).
+		AddKeyValue("script args", getScriptWithArgs(targetProcess)).
+		AddKeyValue("error log path", targetProcess.PM2Env.PMErrLogPath).
+		AddKeyValue("out log path", targetProcess.PM2Env.PMOutLogPath).
+		AddKeyValue("pid path", targetProcess.PM2Env.PMPidPath).
+		AddKeyValue("interpreter", getInterpreterName(targetProcess)).
+		AddKeyValue("interpreter args", "N/A").
+		AddKeyValue("script id", strconv.Itoa(targetProcess.PM2Env.ID)).
+		AddKeyValue("exec cwd", getCurrentWorkingDir()).
+		AddKeyValue("exec mode", "fork_mode").
+		AddKeyValue("node.js version", "N/A").
+		AddKeyValue("node env", "N/A").
+		AddKeyValue("watch & reload", "✘").
+		AddKeyValue("unstable restarts", strconv.Itoa(targetProcess.PM2Env.UnstableRestarts)).
+		AddKeyValue("created at", formatTimestamp(targetProcess.PM2Env.CreatedAt))
+	
+	mainTable.Print()
 	
 	// Show divergent environment variables
 	showDivergentEnvVars(targetProcess.PM2Env.Env)
@@ -125,12 +133,6 @@ func formatTimestamp(timestamp int64) string {
 	return t.Format("2006-01-02T15:04:05.000Z")
 }
 
-func truncateField(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
 
 func getScriptWithArgs(process *systemd.ProcessInfo) string {
 	script := process.PM2Env.PMExecPath
@@ -171,24 +173,21 @@ func showDivergentEnvVars(processEnv map[string]string) {
 	}
 	
 	// Find divergent variables
-	var divergent [][]string
+	divergentTable := table.NewKeyValueTable().
+		SetKeyWidth(16).
+		SetValueWidth(99)
+	
+	hasDivergent := false
 	for key, processValue := range processEnv {
 		currentValue, exists := currentEnv[key]
 		if !exists || currentValue != processValue {
-			divergent = append(divergent, []string{key, processValue})
+			divergentTable.AddKeyValue(key, processValue)
+			hasDivergent = true
 		}
 	}
 	
-	if len(divergent) > 0 {
+	if hasDivergent {
 		fmt.Println("Divergent env variables from local env")
-		fmt.Println("┌──────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐")
-		
-		for _, pair := range divergent {
-			key := pair[0]
-			value := pair[1]
-			fmt.Printf("│ %-16s │ %-99s │\n", truncateField(key, 16), truncateField(value, 99))
-		}
-		
-		fmt.Println("└──────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘")
+		divergentTable.Print()
 	}
 }

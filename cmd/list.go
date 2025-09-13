@@ -3,9 +3,11 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/wojtekw92/pm2go/internal/table"
 )
 
 var listCmd = &cobra.Command{
@@ -24,27 +26,29 @@ func handleList() {
 		os.Exit(1)
 	}
 
-	// Print PM2-style table
-	fmt.Println("┌─────┬──────────────────┬─────────┬─────────┬─────────┬─────────┬─────────┬──────────┬─────────┐")
-	fmt.Println("│ id  │ name             │ pid     │ status  │ restart │ uptime  │ ↺       │ memory   │ cpu     │")
-	fmt.Println("├─────┼──────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────┼─────────┤")
+	// Create table with headers
+	tbl := table.NewTable("id", "name", "pid", "status", "restart", "uptime", "↺", "memory", "cpu")
 
+	// Add each process as a row
 	for _, process := range processes {
 		uptime := formatUptime(process.PM2Env.PMUptime)
 		memory := formatMemory(process.Monit.Memory)
 		
-		fmt.Printf("│ %-3d │ %-16s │ %-7d │ %-7s │ %-7d │ %-7s │ %-7d │ %-8s │ %-7s │\n",
-			process.PM2Env.ID, 
-			truncateString(process.Name, 16), 
-			process.PID,
-			process.PM2Env.Status, 
-			process.PM2Env.RestartTime,
+		tbl.AddRow(
+			strconv.Itoa(process.PM2Env.ID),
+			process.Name,
+			strconv.Itoa(process.PID),
+			process.PM2Env.Status,
+			strconv.Itoa(process.PM2Env.RestartTime),
 			uptime,
-			process.PM2Env.RestartTime, 
+			strconv.Itoa(process.PM2Env.RestartTime),
 			memory,
-			fmt.Sprintf("%d%%", process.Monit.CPU))
+			fmt.Sprintf("%d%%", process.Monit.CPU),
+		)
 	}
-	fmt.Println("└─────┴──────────────────┴─────────┴─────────┴─────────┴─────────┴─────────┴──────────┴─────────┘")
+
+	// Print the table
+	tbl.Print()
 }
 
 func truncateString(s string, maxLen int) string {
