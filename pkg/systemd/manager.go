@@ -29,9 +29,65 @@ func (m *Manager) serviceName(appName string) string {
 	return m.prefix + appName
 }
 
+// serviceNameWithID returns the systemd service name with ID for an app
+func (m *Manager) serviceNameWithID(id int, appName string) string {
+	return fmt.Sprintf("%s%d-%s", m.prefix, id, appName)
+}
+
+// parseServiceName parses service name and returns ID and app name
+func (m *Manager) parseServiceName(serviceName string) (int, string, error) {
+	if !strings.HasPrefix(serviceName, m.prefix) {
+		return 0, "", fmt.Errorf("invalid service name format")
+	}
+	
+	// Remove prefix: pm2-{id}-{name}.service -> {id}-{name}.service
+	remaining := strings.TrimPrefix(serviceName, m.prefix)
+	remaining = strings.TrimSuffix(remaining, ".service")
+	
+	// Find first dash to separate ID from name
+	dashIndex := strings.Index(remaining, "-")
+	if dashIndex == -1 {
+		// Old format without ID, return ID 0
+		return 0, remaining, nil
+	}
+	
+	idStr := remaining[:dashIndex]
+	appName := remaining[dashIndex+1:]
+	
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		// Old format without ID, treat whole thing as name
+		return 0, remaining, nil
+	}
+	
+	return id, appName, nil
+}
+
+// getNextAvailableID finds the next available ID
+func (m *Manager) getNextAvailableID() int {
+	processes, err := m.List()
+	if err != nil {
+		return 0
+	}
+	
+	maxID := -1
+	for _, process := range processes {
+		if process.PM2Env.ID > maxID {
+			maxID = process.PM2Env.ID
+		}
+	}
+	
+	return maxID + 1
+}
+
 // Start creates and starts a systemd service for the given app config
 func (m *Manager) Start(config AppConfig) error {
-	serviceName := m.serviceName(config.Name)
+	// Assign ID if not set
+	if config.ID == 0 {
+		config.ID = m.getNextAvailableID()
+	}
+	
+	serviceName := m.serviceNameWithID(config.ID, config.Name)
 
 	// Generate systemd service file content
 	serviceContent := m.generateServiceFile(config)
@@ -102,21 +158,32 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 			parts := strings.Fields(line)
 			if len(parts) >= 4 {
 				serviceName := parts[0]
-				appName := strings.TrimPrefix(strings.TrimSuffix(serviceName, ".service"), m.prefix)
 				status := parts[2]
+
+				// Parse ID and name from service name
+				id, appName, err := m.parseServiceName(serviceName)
+				if err != nil {
+					continue // Skip invalid service names
+				}
 
 				// Get PID for the service
 				pid := m.getServicePID(serviceName)
+				
+				// Get memory usage and uptime
+				memory := m.getServiceMemory(pid)
+				uptime := m.getServiceUptime(serviceName)
+				createdAt := time.Now().Unix()*1000 - uptime
 
 				process := ProcessInfo{
 					PID:  pid,
 					Name: appName,
 					PM2Env: PM2Env{
+						ID:               id,
 						Name:             appName,
 						ExecMode:         "fork",
 						Status:           m.mapSystemdStatus(status),
-						PMUptime:         time.Now().Unix() * 1000,
-						CreatedAt:        time.Now().Unix() * 1000,
+						PMUptime:         uptime,
+						CreatedAt:        createdAt,
 						RestartTime:      0,
 						UnstableRestarts: 0,
 						Versioning:       nil,
@@ -125,8 +192,8 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 						},
 					},
 					Monit: PM2Monit{
-						Memory: 0,
-						CPU:    0,
+						Memory: memory,
+						CPU:    0, // CPU usage calculation is complex, leaving as 0 for now
 					},
 				}
 				processes = append(processes, process)
@@ -181,17 +248,12 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 		interpreterFields := strings.Fields(config.Interpreter)
 		fullPath, err := exec.LookPath(interpreterFields[0])
 		
-		fmt.Printf("DEBUG: Looking for interpreter '%s'\n", interpreterFields[0])
-		fmt.Printf("DEBUG: LookPath result: '%s', error: %v\n", fullPath, err)
-		
 		var interpreterPath string
 		if err != nil {
 			// Fallback to original interpreter if not found in PATH
 			interpreterPath = interpreterFields[0]
-			fmt.Printf("DEBUG: Using fallback: %s\n", interpreterPath)
 		} else {
 			interpreterPath = fullPath
-			fmt.Printf("DEBUG: Using full path: %s\n", interpreterPath)
 		}
 		
 		// Add interpreter arguments if any
@@ -203,7 +265,6 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 		if config.Args != "" {
 			execStart += " " + config.Args
 		}
-		fmt.Printf("DEBUG: Final ExecStart: %s\n", execStart)
 	} else {
 		// Auto-detect interpreter or use script directly
 		if strings.HasSuffix(config.Script, ".py") {
@@ -343,6 +404,62 @@ func (m *Manager) getServicePID(serviceName string) int {
 		return 0
 	}
 	return pid
+}
+
+// getServiceMemory returns memory usage in bytes for a given PID
+func (m *Manager) getServiceMemory(pid int) int {
+	if pid == 0 {
+		return 0
+	}
+	
+	// Read memory from /proc/PID/status
+	statusFile := fmt.Sprintf("/proc/%d/status", pid)
+	content, err := os.ReadFile(statusFile)
+	if err != nil {
+		return 0
+	}
+	
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "VmRSS:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				memKB, err := strconv.Atoi(fields[1])
+				if err == nil {
+					return memKB * 1024 // Convert KB to bytes
+				}
+			}
+		}
+	}
+	return 0
+}
+
+// getServiceUptime returns uptime in milliseconds for a service
+func (m *Manager) getServiceUptime(serviceName string) int64 {
+	cmd := []string{"systemctl"}
+	if m.userMode {
+		cmd = append(cmd, "--user")
+	}
+	cmd = append(cmd, "show", serviceName, "--property=ActiveEnterTimestamp", "--value")
+	
+	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	if err != nil {
+		return 0
+	}
+	
+	timestamp := strings.TrimSpace(string(output))
+	if timestamp == "" || timestamp == "n/a" {
+		return 0
+	}
+	
+	// Parse systemd timestamp format
+	startTime, err := time.Parse("Mon 2006-01-02 15:04:05 MST", timestamp)
+	if err != nil {
+		return 0
+	}
+	
+	uptime := time.Since(startTime)
+	return int64(uptime.Milliseconds())
 }
 
 // mapSystemdStatus maps systemd status to PM2 status

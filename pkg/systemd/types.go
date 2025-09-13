@@ -2,6 +2,7 @@ package systemd
 
 // AppConfig represents the configuration for a PM2 application
 type AppConfig struct {
+	ID          int               `json:"id"`
 	Name        string            `json:"name"`
 	Script      string            `json:"script"`
 	Interpreter string            `json:"interpreter,omitempty"`
@@ -24,6 +25,7 @@ type ProcessInfo struct {
 }
 
 type PM2Env struct {
+	ID               int         `json:"pm_id"`
 	Name             string      `json:"name"`
 	ExecMode         string      `json:"exec_mode"`
 	Status           string      `json:"status"`

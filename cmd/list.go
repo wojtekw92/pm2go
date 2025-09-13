@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -24,20 +25,25 @@ func handleList() {
 	}
 
 	// Print PM2-style table
-	fmt.Println("┌─────┬──────────────────┬─────────────┬─────────┬─────────┬──────────┐")
-	fmt.Println("│ id  │ name             │ mode        │ ↺      │ status  │ cpu      │")
-	fmt.Println("├─────┼──────────────────┼─────────────┼─────────┼─────────┼──────────┤")
+	fmt.Println("┌─────┬──────────────────┬─────────┬─────────┬─────────┬─────────┬─────────┬──────────┐")
+	fmt.Println("│ id  │ name             │ pid     │ status  │ restart │ uptime  │ ↺       │ memory   │")
+	fmt.Println("├─────┼──────────────────┼─────────┼─────────┼─────────┼─────────┼─────────┼──────────┤")
 
-	for id, process := range processes {
-		fmt.Printf("│ %-3d │ %-16s │ %-11s │ %-7d │ %-7s │ %-8s │\n",
-			id, 
+	for _, process := range processes {
+		uptime := formatUptime(process.PM2Env.PMUptime)
+		memory := formatMemory(process.Monit.Memory)
+		
+		fmt.Printf("│ %-3d │ %-16s │ %-7d │ %-7s │ %-7d │ %-7s │ %-7d │ %-8s │\n",
+			process.PM2Env.ID, 
 			truncateString(process.Name, 16), 
-			process.PM2Env.ExecMode, 
-			process.PM2Env.RestartTime, 
+			process.PID,
 			process.PM2Env.Status, 
-			fmt.Sprintf("%d%%", process.Monit.CPU))
+			process.PM2Env.RestartTime,
+			uptime,
+			process.PM2Env.RestartTime, 
+			memory)
 	}
-	fmt.Println("└─────┴──────────────────┴─────────────┴─────────┴─────────┴──────────┘")
+	fmt.Println("└─────┴──────────────────┴─────────┴─────────┴─────────┴─────────┴─────────┴──────────┘")
 }
 
 func truncateString(s string, maxLen int) string {
@@ -45,4 +51,56 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// formatUptime converts milliseconds to human readable format
+func formatUptime(uptimeMs int64) string {
+	if uptimeMs == 0 {
+		return "0s"
+	}
+	
+	duration := time.Duration(uptimeMs) * time.Millisecond
+	
+	days := int(duration.Hours()) / 24
+	hours := int(duration.Hours()) % 24
+	minutes := int(duration.Minutes()) % 60
+	seconds := int(duration.Seconds()) % 60
+	
+	if days > 0 {
+		return fmt.Sprintf("%dd", days)
+	} else if hours > 0 {
+		return fmt.Sprintf("%dh", hours)
+	} else if minutes > 0 {
+		return fmt.Sprintf("%dm", minutes)
+	} else {
+		return fmt.Sprintf("%ds", seconds)
+	}
+}
+
+// formatMemory converts bytes to human readable format
+func formatMemory(bytes int) string {
+	if bytes == 0 {
+		return "0b"
+	}
+	
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%db", bytes)
+	}
+	
+	exp := 0
+	for n := bytes; n >= unit && exp < 3; n /= unit {
+		exp++
+	}
+	
+	result := float64(bytes) / float64(1<<(10*exp))
+	units := []string{"b", "kb", "mb", "gb"}
+	
+	if result >= 100 {
+		return fmt.Sprintf("%.0f%s", result, units[exp])
+	} else if result >= 10 {
+		return fmt.Sprintf("%.1f%s", result, units[exp])
+	} else {
+		return fmt.Sprintf("%.2f%s", result, units[exp])
+	}
 }
