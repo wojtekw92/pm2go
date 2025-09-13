@@ -2,11 +2,12 @@ package systemd
 
 // AppConfig represents the configuration for a PM2 application
 type AppConfig struct {
-	Name   string            `json:"name"`
-	Script string            `json:"script"`
-	Cwd    string            `json:"cwd,omitempty"`
-	Args   string            `json:"args,omitempty"`
-	Env    map[string]string `json:"env,omitempty"`
+	Name        string            `json:"name"`
+	Script      string            `json:"script"`
+	Interpreter string            `json:"interpreter,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Args        string            `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
 }
 
 // EcosystemConfig represents PM2 ecosystem file structure

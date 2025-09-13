@@ -166,14 +166,56 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 		workingDir, _ = os.Getwd()
 	}
 
-	execStart := config.Script
-	if config.Args != "" {
-		execStart += " " + config.Args
-	}
+	// Create PM2-style log directory
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".pm2", "logs")
+	os.MkdirAll(logDir, 0755)
+	
+	outLog := filepath.Join(logDir, config.Name+"-out.log")
+	errLog := filepath.Join(logDir, config.Name+"-error.log")
 
-	// Handle Python scripts
-	if strings.HasSuffix(config.Script, ".py") {
-		execStart = "python3 " + execStart
+	var execStart string
+	
+	if config.Interpreter != "" {
+		// Use explicit interpreter: "python3 script.py args"
+		interpreterPath, err := exec.LookPath(strings.Fields(config.Interpreter)[0])
+		if err != nil {
+			// Fallback to original interpreter if not found in PATH
+			interpreterPath = config.Interpreter
+		} else if len(strings.Fields(config.Interpreter)) > 1 {
+			// Keep additional interpreter args: "python3 -u"
+			interpreterPath = interpreterPath + " " + strings.Join(strings.Fields(config.Interpreter)[1:], " ")
+		}
+		
+		execStart = interpreterPath + " " + config.Script
+		if config.Args != "" {
+			execStart += " " + config.Args
+		}
+	} else {
+		// Auto-detect interpreter or use script directly
+		if strings.HasSuffix(config.Script, ".py") {
+			pythonPath, err := exec.LookPath("python3")
+			if err != nil {
+				pythonPath = "python3"
+			}
+			execStart = pythonPath + " " + config.Script
+		} else if strings.HasSuffix(config.Script, ".js") {
+			nodePath, err := exec.LookPath("node")
+			if err != nil {
+				nodePath, err = exec.LookPath("nodejs")
+				if err != nil {
+					nodePath = "node"
+				}
+			}
+			execStart = nodePath + " " + config.Script
+		} else {
+			// Use script directly (should have shebang)
+			execStart = config.Script
+		}
+		
+		if config.Args != "" {
+			execStart += " " + config.Args
+		}
 	}
 
 	var service string
@@ -189,12 +231,12 @@ WorkingDirectory=%s
 ExecStart=%s
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:%s
+StandardError=append:%s
 
 [Install]
 WantedBy=default.target
-`, config.Name, workingDir, execStart)
+`, config.Name, workingDir, execStart, outLog, errLog)
 	} else {
 		// In system mode, specify the user
 		service = fmt.Sprintf(`[Unit]
@@ -208,12 +250,12 @@ WorkingDirectory=%s
 ExecStart=%s
 Restart=always
 RestartSec=3
-StandardOutput=journal
-StandardError=journal
+StandardOutput=append:%s
+StandardError=append:%s
 
 [Install]
 WantedBy=default.target
-`, config.Name, m.getCurrentUser(), workingDir, execStart)
+`, config.Name, m.getCurrentUser(), workingDir, execStart, outLog, errLog)
 	}
 
 	// Add environment variables if present
