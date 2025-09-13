@@ -24,20 +24,20 @@ func handleList() {
 	}
 
 	// Print PM2-style table
-	fmt.Println("┌─────┬──────────┬─────────────┬─────────┬─────────┬──────────┐")
-	fmt.Println("│ id  │ name     │ mode        │ ↺      │ status  │ cpu      │")
-	fmt.Println("├─────┼──────────┼─────────────┼─────────┼─────────┼──────────┤")
+	fmt.Println("┌─────┬──────────────────┬─────────────┬─────────┬─────────┬──────────┐")
+	fmt.Println("│ id  │ name             │ mode        │ ↺      │ status  │ cpu      │")
+	fmt.Println("├─────┼──────────────────┼─────────────┼─────────┼─────────┼──────────┤")
 
 	for id, process := range processes {
-		fmt.Printf("│ %-3d │ %-8s │ %-11s │ %-7d │ %-7s │ %-8s │\n",
+		fmt.Printf("│ %-3d │ %-16s │ %-11s │ %-7d │ %-7s │ %-8s │\n",
 			id, 
-			truncateString(process.Name, 8), 
+			truncateString(process.Name, 16), 
 			process.PM2Env.ExecMode, 
 			process.PM2Env.RestartTime, 
 			process.PM2Env.Status, 
 			fmt.Sprintf("%d%%", process.Monit.CPU))
 	}
-	fmt.Println("└─────┴──────────┴─────────────┴─────────┴─────────┴──────────┘")
+	fmt.Println("└─────┴──────────────────┴─────────────┴─────────┴─────────┴──────────┘")
 }
 
 func truncateString(s string, maxLen int) string {
