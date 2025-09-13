@@ -125,7 +125,7 @@ func (suite *VMTestSuite) TestEnvironmentVariables() {
 
 		// Check logs for environment variables
 		logs := suite.runPM2go("logs", "test-env", "-l", "20")
-		assert.Contains(t, logs, "TEST_VAR=command-line-value")
+		assert.Contains(t, logs, "TEST_VAR: command-line-value")
 		assert.Contains(t, logs, "PYTHON_ENV=production")
 
 		suite.runPM2go("delete", "test-env")
@@ -150,10 +150,10 @@ func (suite *VMTestSuite) TestEcosystemFile() {
 		// Check environment variables from ecosystem
 		time.Sleep(5 * time.Second)
 		nodeLogs := suite.runPM2go("logs", "test-node-app", "-l", "20")
-		assert.Contains(t, nodeLogs, "TEST_VAR=ecosystem-node-value")
+		assert.Contains(t, nodeLogs, "TEST_VAR: ecosystem-node-value")
 
 		pythonLogs := suite.runPM2go("logs", "test-python-app", "-l", "20")
-		assert.Contains(t, pythonLogs, "TEST_VAR=ecosystem-python-value")
+		assert.Contains(t, pythonLogs, "TEST_VAR: ecosystem-python-value")
 
 		// Clean up
 		suite.runPM2go("delete", "all")
