@@ -8,11 +8,16 @@ A drop-in replacement for PM2 that uses systemd for robust process management on
 - ⚡ **systemd powered** - Leverages Linux's native service manager
 - 🚀 **Boot persistence** - Services start automatically on system boot
 - 🔒 **Session independence** - Processes run without active login sessions
-- 🌍 **Environment variables** - Full shell environment inheritance + custom vars
-- 📊 **PM2-compatible output** - Same table and JSON formats
+- 🌍 **Complete environment support** - Full shell environment inheritance with proper quoting
+- 📊 **PM2-compatible output** - Same table and JSON formats with dynamic sizing
 - 🏗️ **Ecosystem files** - Support for PM2 ecosystem.json files
-- 📝 **Centralized logging** - Uses systemd's journald for log management
+- 📝 **PM2-style logging** - File-based logs in `~/.pm2/logs/` directory
 - 🔧 **Easy migration** - Migrate from existing PM2 setups
+- 🆔 **Persistent process IDs** - Consistent IDs across restarts
+- 🔍 **Advanced process inspection** - `describe` and `env` commands
+- ↩️ **Smart restart handling** - Supports both individual and bulk operations
+- 🎨 **Unicode-aware tables** - Proper handling of international characters
+- 📈 **Real-time monitoring** - CPU usage, memory, uptime tracking
 
 ## Installation
 
@@ -69,8 +74,12 @@ This configures:
 # Start a simple script
 pm2go start app.js --name my-app
 
-# Start a Python script with environment variables
-pm2go start server.py --name api --env NODE_ENV=production --env PORT=8080
+# Start a Python script with custom interpreter and arguments
+export TEST_ENV="hello world"
+pm2go start python3 --name api -- server.py --port 8080
+
+# All environment variables are inherited automatically
+pm2go start node --name webapp -- app.js
 
 # Start from ecosystem file
 pm2go start ecosystem.json
@@ -102,11 +111,19 @@ pm2go delete my-app
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `pm2go start <script>` | | Start an application |
-| `pm2go stop <name>` | | Stop an application |
-| `pm2go delete <name>` | `del` | Delete an application |
-| `pm2go list` | `ls`, `l` | List all applications |
-| `pm2go logs [name]` | | Show application logs |
+| `pm2go start <script\|interpreter -- script args>` | | Start an application |
+| `pm2go stop <name\|id\|all>` | | Stop applications |
+| `pm2go restart <name\|id\|all>` | | Restart applications |
+| `pm2go delete <name\|id\|all>` | `del` | Delete applications |
+| `pm2go list` | `ls`, `l` | List all applications with CPU/memory |
+| `pm2go logs [name\|id]` | | Show application logs from files |
+
+### Inspection Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `pm2go describe <name\|id>` | `desc`, `show` | Show detailed process information |
+| `pm2go env <name\|id>` | | Show process environment variables |
 
 ### Advanced Commands
 
@@ -120,7 +137,14 @@ pm2go delete my-app
 
 #### Start Command
 ```bash
+# Simple script
 pm2go start <script> [options]
+
+# Custom interpreter with arguments
+pm2go start <interpreter> --name <name> -- <script> [script-args]
+
+# Restart existing process by ID
+pm2go start <id>
 
 Options:
   -n, --name string     Application name
@@ -129,11 +153,21 @@ Options:
 
 #### Logs Command
 ```bash
-pm2go logs [name] [options]
+pm2go logs [name|id] [options]
 
 Options:
   -f, --follow          Follow log output (like tail -f)
   -l, --lines int       Number of lines to display (default 50)
+```
+
+#### Restart Command
+```bash
+pm2go restart <name|id|all>
+
+Examples:
+  pm2go restart my-app    # Restart by name
+  pm2go restart 0         # Restart by ID
+  pm2go restart all       # Restart all processes
 ```
 
 ## Examples
@@ -144,14 +178,29 @@ Options:
 # Start a Node.js application
 pm2go start server.js --name api
 
-# Start with custom environment
-pm2go start app.py --name worker --env DEBUG=true --env WORKERS=4
+# Start Python script with custom interpreter and arguments
+pm2go start python3 --name worker -- app.py --port 8000 --workers 4
 
-# Start multiple apps from ecosystem file
+# Start from ecosystem file
 pm2go start ecosystem.json
 
-# View logs for specific application
+# List all processes with CPU and memory usage
+pm2go list
+
+# Restart all processes
+pm2go restart all
+
+# View detailed process information
+pm2go describe api
+pm2go describe 0        # By ID
+
+# Show process environment variables
+pm2go env worker
+pm2go env 1             # By ID
+
+# View logs by name or ID
 pm2go logs api
+pm2go logs 0            # By ID
 
 # Follow logs in real-time
 pm2go logs worker --follow
@@ -170,6 +219,7 @@ Create `ecosystem.json`:
     {
       "name": "api-server",
       "script": "server.js",
+      "interpreter": "node",
       "cwd": "/var/www/api",
       "args": "--port 3000",
       "env": {
@@ -181,7 +231,9 @@ Create `ecosystem.json`:
     {
       "name": "worker",
       "script": "worker.py",
+      "interpreter": "/usr/bin/python3",
       "cwd": "/var/www/worker",
+      "args": "--workers 4",
       "env": {
         "REDIS_URL": "redis://localhost:6379",
         "QUEUE_NAME": "tasks"
@@ -193,17 +245,42 @@ Create `ecosystem.json`:
 
 ### Environment Variables
 
-PM2go inherits all shell environment variables and allows custom ones:
+PM2go automatically inherits **ALL** shell environment variables with proper quoting support:
 
 ```bash
-# Shell variables are inherited automatically
-export DATABASE_URL="postgres://localhost/mydb"
-pm2go start app.js  # DATABASE_URL is available
+# All shell variables are inherited automatically (including spaces and special chars)
+export DATABASE_URL="postgres://user:pass@localhost/mydb"
+export DEBUG_MESSAGE="Hello world with spaces"
+export API_KEYS='["key1", "key2"]'
+pm2go start app.js  # All variables available with proper quoting
 
-# Add custom variables
-pm2go start app.js --env NODE_ENV=production --env PORT=8080
+# Variables are properly escaped in systemd service files
+pm2go describe my-app    # Shows all environment variables
+pm2go env my-app         # Lists just the environment variables
 
-# Variables priority: --env flags > shell environment > ecosystem file
+# Command-line variables override shell variables
+pm2go start app.js --env NODE_ENV=production --env DEBUG_MESSAGE="Override value"
+```
+
+### Advanced Process Management
+
+```bash
+# Start with custom interpreter and complex arguments
+pm2go start python3 --name ml-worker -- train.py --model transformer --batch-size 32
+
+# Process inspection
+pm2go describe ml-worker     # Detailed process info
+pm2go env ml-worker          # Environment variables only
+
+# Bulk operations
+pm2go restart all           # Restart all processes
+pm2go stop all              # Stop all processes  
+pm2go delete all            # Delete all processes
+
+# ID-based operations (processes have persistent IDs)
+pm2go start 0               # Restart process with ID 0
+pm2go logs 1 -f            # Follow logs for process ID 1
+pm2go describe 2           # Describe process ID 2
 ```
 
 ## Aliasing to PM2
@@ -341,18 +418,20 @@ pm2go logs app-name -f
 
 ## Log Management
 
-PM2go uses systemd's journald for centralized logging:
+PM2go uses **PM2-style file-based logging** with logs stored in `~/.pm2/logs/`:
 
 ### View Logs
 
-PM2go provides a convenient logs command that uses systemd's journald:
+PM2go provides PM2-compatible logging with file-based storage:
 
 ```bash
-# View logs for specific app
+# View logs for specific app (reads from files)
 pm2go logs my-app
+pm2go logs 0            # By process ID
 
 # Follow logs in real-time
 pm2go logs my-app -f
+pm2go logs 0 -f         # By process ID
 
 # View all application logs
 pm2go logs
@@ -360,10 +439,25 @@ pm2go logs
 # Show last 100 lines
 pm2go logs my-app -l 100
 
-# Advanced: Direct journalctl access
-journalctl --user -u pm2-my-app -f
-journalctl --user -u "pm2-*" -f
-journalctl --user -u pm2-my-app --since "1 hour ago"
+# Log files are stored in PM2-style structure:
+# ~/.pm2/logs/my-app-out.log    (stdout)
+# ~/.pm2/logs/my-app-error.log  (stderr)
+```
+
+### Log File Structure
+
+```bash
+# PM2-compatible log directory structure
+~/.pm2/logs/
+├── app-0-out.log         # Process ID 0 stdout
+├── app-0-error.log       # Process ID 0 stderr
+├── worker-1-out.log      # Process ID 1 stdout
+├── worker-1-error.log    # Process ID 1 stderr
+└── ...
+
+# Direct file access (if needed)
+tail -f ~/.pm2/logs/my-app-out.log
+tail -f ~/.pm2/logs/my-app-error.log
 ```
 
 ### Clear Logs
@@ -372,12 +466,11 @@ journalctl --user -u pm2-my-app --since "1 hour ago"
 # Clear all logs
 pm2go flush
 
-# Clear specific app logs
+# Clear specific app logs  
 pm2go flush my-app
 
-# Manual journald cleanup
-journalctl --user --rotate
-journalctl --user --vacuum-time=1d
+# Manual log cleanup
+rm ~/.pm2/logs/*
 ```
 
 ## Troubleshooting
@@ -438,11 +531,15 @@ systemctl --user show pm2-app-name --property=Environment
 |---------|-----|-------|
 | **Process Management** | Custom daemon | systemd |
 | **Boot Persistence** | Custom scripts | systemd lingering |
-| **Logging** | Custom logs | journald |
+| **Logging** | File-based (~/.pm2/logs/) | File-based (~/.pm2/logs/) |
+| **Process IDs** | Sequential | Persistent across restarts |
+| **Environment Variables** | Partial inheritance | Complete inheritance + quoting |
+| **CPU/Memory Monitoring** | Built-in | Real-time via /proc |
 | **Clustering** | Built-in | External (nginx, HAProxy) |
 | **Memory Usage** | ~50MB daemon | ~0MB (uses systemd) |
 | **Reliability** | Good | Excellent (systemd) |
 | **Platform Support** | Cross-platform | Linux only |
+| **Unicode Support** | Basic | Full Unicode table rendering |
 
 ## API Usage
 
@@ -461,8 +558,10 @@ func main() {
     
     // Start application
     config := systemd.AppConfig{
-        Name:   "my-app",
-        Script: "server.js",
+        ID:          0,
+        Name:        "my-app",
+        Script:      "server.js",
+        Interpreter: "node",
         Env: map[string]string{
             "NODE_ENV": "production",
             "PORT": "3000",
@@ -477,10 +576,43 @@ func main() {
     // List processes
     processes, _ := manager.List()
     for _, proc := range processes {
-        fmt.Printf("App: %s, Status: %s\n", proc.Name, proc.PM2Env.Status)
+        fmt.Printf("App: %s, Status: %s, CPU: %d%%, Memory: %s\n", 
+            proc.Name, proc.PM2Env.Status, proc.Monit.CPU, proc.Monit.Memory)
     }
 }
 ```
+
+## New Features in This Version
+
+### 🎯 Enhanced Process Management
+- **Persistent Process IDs**: Process IDs remain consistent across restarts
+- **Bulk Operations**: `restart all`, `stop all`, `delete all` commands
+- **ID-Based Operations**: All commands now accept process IDs: `pm2go logs 0`, `pm2go restart 1`
+
+### 🔍 Advanced Process Inspection
+- **`describe` command**: Detailed process information with PM2-style formatting
+- **`env` command**: View all environment variables for any process
+- **Divergent environment display**: See which variables differ from current shell
+
+### ⚙️ Better Interpreter Support
+- **Custom interpreter paths**: `pm2go start python3 --name app -- script.py`
+- **Full path resolution**: Works with `nvm`, `venv`, and other environment managers
+- **Argument handling**: Proper support for complex command-line arguments
+
+### 📊 Real-Time Monitoring
+- **CPU usage calculation**: Real-time CPU percentage from `/proc/pid/stat`
+- **Memory tracking**: Live memory usage display
+- **Enhanced process table**: Dynamic column sizing with Unicode support
+
+### 🌐 Complete Environment Support
+- **Full environment inheritance**: ALL shell variables are passed through
+- **Proper quoting**: Handles spaces, special characters, and quotes in values
+- **systemd integration**: Environment variables properly escaped in service files
+
+### 📝 PM2-Compatible Logging
+- **File-based logs**: Stores logs in `~/.pm2/logs/` like PM2
+- **ID-based log access**: `pm2go logs 0` works with process IDs
+- **Real-time following**: `pm2go logs app -f` for live log streaming
 
 ## Contributing
 
