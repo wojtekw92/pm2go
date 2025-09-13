@@ -1,81 +1,74 @@
 #!/usr/bin/env python3
+"""
+Simple test application for PM2go testing.
+Produces output every 2 seconds with timestamps and optional arguments.
+"""
 
-import os
 import sys
 import time
-import signal
-import json
+import argparse
+import os
 from datetime import datetime
 
-class TestApp:
-    def __init__(self):
-        self.running = True
-        self.counter = 0
-        
-    def signal_handler(self, signum, frame):
-        print(f"Received signal {signum}, shutting down gracefully...")
-        self.running = False
-
-    def run(self):
-        print("Test Python app starting...")
-        print(f"Environment: {os.environ.get('PYTHON_ENV', 'development')}")
-        print(f"Port: {os.environ.get('PORT', '8000')}")
-        print(f"PID: {os.getpid()}")
-        
-        # Register signal handlers
-        signal.signal(signal.SIGTERM, self.signal_handler)
-        signal.signal(signal.SIGINT, self.signal_handler)
-        
-        # Print environment variables
-        print("Environment variables:")
-        for key, value in os.environ.items():
-            if key.startswith('TEST_') or key.startswith('PYTHON_'):
-                print(f"  {key}={value}")
-        
-        # Check for crash scenario
-        crash_after = os.environ.get('CRASH_AFTER')
-        crash_time = None
-        if crash_after:
-            crash_time = time.time() + int(crash_after)
-            print(f"Will crash after {crash_after} seconds for testing")
-        
-        print("Test Python app is running. Use Ctrl+C to stop.")
-        
-        # Main loop
-        while self.running:
-            self.counter += 1
-            timestamp = datetime.now().isoformat()
-            print(f"[{timestamp}] Heartbeat #{self.counter} - PID: {os.getpid()}")
+def main():
+    parser = argparse.ArgumentParser(description='PM2go test application')
+    parser.add_argument('--interval', '-i', type=int, default=2, 
+                       help='Output interval in seconds (default: 2)')
+    parser.add_argument('--max-count', '-c', type=int, default=0,
+                       help='Maximum number of outputs (0 = infinite)')
+    parser.add_argument('--error-every', '-e', type=int, default=0,
+                       help='Print to stderr every N iterations (0 = never)')
+    parser.add_argument('--message', '-m', type=str, default='Hello from PM2go test app',
+                       help='Custom message to output')
+    parser.add_argument('--env-vars', action='store_true',
+                       help='Print environment variables on startup')
+    
+    args = parser.parse_args()
+    
+    # Print startup info
+    print(f"=== PM2go Test App Started ===")
+    print(f"PID: {os.getpid()}")
+    print(f"Args: {sys.argv}")
+    print(f"Interval: {args.interval}s")
+    print(f"Max count: {args.max_count if args.max_count > 0 else 'infinite'}")
+    
+    # Print environment variables if requested
+    if args.env_vars:
+        print("=== Environment Variables ===")
+        for key, value in sorted(os.environ.items()):
+            if key.startswith(('TEST_', 'PM2GO_', 'NODE_', 'PYTHON_')):
+                print(f"{key}={value}")
+        print("=============================")
+    
+    count = 0
+    
+    try:
+        while True:
+            count += 1
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            # Test environment variables
-            test_var = os.environ.get('TEST_VAR')
-            if test_var:
-                print(f"TEST_VAR: {test_var}")
+            # Regular output to stdout
+            print(f"[{timestamp}] #{count}: {args.message}")
+            sys.stdout.flush()
             
-            # Simulate memory usage reporting
-            try:
-                import psutil
-                process = psutil.Process()
-                mem_info = process.memory_info()
-                print(f"Memory: RSS={mem_info.rss // 1024 // 1024}MB, VMS={mem_info.vms // 1024 // 1024}MB")
-            except ImportError:
-                print("Memory: psutil not available")
+            # Optional error output
+            if args.error_every > 0 and count % args.error_every == 0:
+                print(f"[{timestamp}] ERROR #{count}: This is an error message", file=sys.stderr)
+                sys.stderr.flush()
             
-            # Check for crash condition
-            if crash_time and time.time() >= crash_time:
-                print("Simulating crash for testing...")
-                sys.exit(1)
+            # Check if we've reached max count
+            if args.max_count > 0 and count >= args.max_count:
+                print(f"[{timestamp}] Reached max count ({args.max_count}), exiting")
+                break
+                
+            time.sleep(args.interval)
             
-            time.sleep(5)
-        
-        print("Test Python app shutting down gracefully.")
+    except KeyboardInterrupt:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Received SIGINT, shutting down gracefully")
+        print(f"Total outputs: {count}")
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
-    app = TestApp()
-    try:
-        app.run()
-    except KeyboardInterrupt:
-        print("Interrupted by user")
-    except Exception as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+    main()
