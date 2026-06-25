@@ -2,6 +2,8 @@
 
 # PM2go environment variable inheritance tests
 
+export PM2GO_SERVICE_PREFIX="${PM2GO_SERVICE_PREFIX:-pm2go-test-$$-}"
+
 setup() {
     # Build pm2go if not exists
     if [[ ! -f "./pm2go" ]]; then

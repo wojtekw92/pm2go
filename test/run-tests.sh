@@ -25,16 +25,25 @@ if ! command -v bats &> /dev/null; then
     exit 1
 fi
 
-# Build pm2go if it doesn't exist
-if [[ ! -f "./pm2go" ]]; then
-    echo "Building pm2go..."
-    go build -o pm2go
-    echo
+if ! command -v go &> /dev/null; then
+    echo "ERROR: Go is not installed or not on PATH"
+    exit 1
 fi
 
-# Clean up any existing processes before starting
-echo "Cleaning up any existing PM2go processes..."
-./pm2go delete all 2>/dev/null || true
+export PM2GO_SERVICE_PREFIX="${PM2GO_SERVICE_PREFIX:-pm2go-test-$(date +%s)-}"
+
+cleanup() {
+    ./pm2go delete all 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "Building pm2go..."
+go build -o pm2go .
+echo
+
+echo "Using test service prefix: $PM2GO_SERVICE_PREFIX"
+echo "Cleaning up existing test PM2go processes..."
+cleanup
 echo
 
 # Run the test suites
@@ -72,9 +81,8 @@ bats test/json-output.bats
 echo
 echo "=== Test Suite Complete ==="
 
-# Final cleanup
 echo "Cleaning up test processes..."
-./pm2go delete all 2>/dev/null || true
+cleanup
 
 echo
-echo "All tests completed successfully! ✅"
+echo "All tests completed successfully!"

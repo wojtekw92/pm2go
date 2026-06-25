@@ -6,6 +6,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$PROJECT_ROOT"
 
+failures=0
+
 echo "=== PM2go Test Structure Validation ==="
 echo
 
@@ -26,6 +28,7 @@ for file in "${test_files[@]}"; do
         echo "  ✓ $file exists"
     else
         echo "  ✗ $file missing"
+        failures=$((failures + 1))
     fi
 done
 
@@ -42,22 +45,25 @@ if [[ -f "test/fixtures/test-app.py" ]]; then
     fi
 else
     echo "  ✗ test-app.py missing"
+    failures=$((failures + 1))
 fi
 
 if [[ -f "test/fixtures/test-ecosystem.json" ]]; then
     echo "  ✓ test-ecosystem.json exists"
 else
     echo "  ✗ test-ecosystem.json missing"
+    failures=$((failures + 1))
 fi
 
 echo
 
 # Check test app functionality
 echo "✓ Testing test application..."
-if python3 test/fixtures/test-app.py --max-count 1 --interval 0.5 >/dev/null 2>&1; then
+if python3 test/fixtures/test-app.py --max-count 1 --interval 1 >/dev/null 2>&1; then
     echo "  ✓ test-app.py runs successfully"
 else
     echo "  ✗ test-app.py failed to run"
+    failures=$((failures + 1))
 fi
 
 echo
@@ -82,12 +88,14 @@ for file in "${test_files[@]}"; do
         if ! grep -q '#!/usr/bin/env bats' "$file"; then
             echo "  ⚠ $file missing bats shebang"
             syntax_ok=false
+            failures=$((failures + 1))
         fi
         
         # Check for proper test structure
         if ! grep -q '^@test' "$file"; then
             echo "  ⚠ $file has no tests"
             syntax_ok=false
+            failures=$((failures + 1))
         fi
         
         # Check for setup/teardown functions
@@ -109,6 +117,7 @@ if go build -o pm2go >/dev/null 2>&1; then
     echo "  ✓ PM2go builds successfully"
 else
     echo "  ✗ PM2go build failed"
+    failures=$((failures + 1))
 fi
 
 echo
@@ -126,6 +135,11 @@ done
 echo "📊 Total test files: ${#test_files[@]}"
 echo "📊 Total tests: $total_tests"
 echo "📊 Test fixtures: 2 (test-app.py, test-ecosystem.json)"
+
+if [[ "$failures" -gt 0 ]]; then
+    echo "❌ Validation failed with $failures issue(s)"
+    exit 1
+fi
 
 echo
 echo "🚀 To run tests, install bats-core and run:"

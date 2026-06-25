@@ -2,13 +2,21 @@ package systemd
 
 // AppConfig represents the configuration for a PM2 application
 type AppConfig struct {
-	ID          int               `json:"id"`
-	Name        string            `json:"name"`
-	Script      string            `json:"script"`
-	Interpreter string            `json:"interpreter,omitempty"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Args        string            `json:"args,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
+	ID           int               `json:"id"`
+	Name         string            `json:"name"`
+	Script       string            `json:"script"`
+	Interpreter  string            `json:"interpreter,omitempty"`
+	Cwd          string            `json:"cwd,omitempty"`
+	Args         string            `json:"args,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	OutFile      string            `json:"out_file,omitempty"`
+	ErrorFile    string            `json:"error_file,omitempty"`
+	LogFile      string            `json:"log_file,omitempty"`
+	MergeLogs    bool              `json:"merge_logs,omitempty"`
+	CombineLogs  bool              `json:"combine_logs,omitempty"`
+	Autorestart  *bool             `json:"autorestart,omitempty"`
+	RestartDelay int               `json:"restart_delay,omitempty"`
+	MaxRestarts  int               `json:"max_restarts,omitempty"`
 }
 
 // EcosystemConfig represents PM2 ecosystem file structure
@@ -18,9 +26,9 @@ type EcosystemConfig struct {
 
 // ProcessInfo represents PM2-compatible process information for JSON output
 type ProcessInfo struct {
-	PID    int     `json:"pid"`
-	Name   string  `json:"name"`
-	PM2Env PM2Env  `json:"pm2_env"`
+	PID    int      `json:"pid"`
+	Name   string   `json:"name"`
+	PM2Env PM2Env   `json:"pm2_env"`
 	Monit  PM2Monit `json:"monit"`
 }
 
@@ -36,6 +44,7 @@ type PM2Env struct {
 	Versioning       interface{}       `json:"versioning"`
 	Node             PM2Node           `json:"node"`
 	PMExecPath       string            `json:"pm_exec_path"`
+	PMCwd            string            `json:"pm_cwd"`
 	PMOutLogPath     string            `json:"pm_out_log_path"`
 	PMErrLogPath     string            `json:"pm_err_log_path"`
 	PMPidPath        string            `json:"pm_pid_path"`
@@ -55,11 +64,15 @@ type PM2Monit struct {
 
 // ServiceConfig holds parsed service file configuration
 type ServiceConfig struct {
-	Script      string
-	Interpreter string
-	Args        string
-	OutLogPath  string
-	ErrLogPath  string
-	PidPath     string
-	Env         map[string]string
+	Script       string
+	Interpreter  string
+	Cwd          string
+	Args         string
+	OutLogPath   string
+	ErrLogPath   string
+	PidPath      string
+	Env          map[string]string
+	Autorestart  bool
+	RestartDelay int
+	MaxRestarts  int
 }

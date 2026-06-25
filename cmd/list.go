@@ -12,7 +12,7 @@ import (
 
 var listCmd = &cobra.Command{
 	Use:     "list",
-	Aliases: []string{"ls", "l"},
+	Aliases: []string{"ls", "l", "status"},
 	Short:   "List all applications",
 	Run: func(cmd *cobra.Command, args []string) {
 		handleList()
@@ -33,7 +33,7 @@ func handleList() {
 	for _, process := range processes {
 		uptime := formatUptime(process.PM2Env.PMUptime)
 		memory := formatMemory(process.Monit.Memory)
-		
+
 		tbl.AddRow(
 			strconv.Itoa(process.PM2Env.ID),
 			process.Name,
@@ -63,14 +63,14 @@ func formatUptime(uptimeMs int64) string {
 	if uptimeMs == 0 {
 		return "0s"
 	}
-	
+
 	duration := time.Duration(uptimeMs) * time.Millisecond
-	
+
 	days := int(duration.Hours()) / 24
 	hours := int(duration.Hours()) % 24
 	minutes := int(duration.Minutes()) % 60
 	seconds := int(duration.Seconds()) % 60
-	
+
 	if days > 0 {
 		return fmt.Sprintf("%dd", days)
 	} else if hours > 0 {
@@ -87,25 +87,25 @@ func formatMemory(bytes int) string {
 	if bytes == 0 {
 		return "0b"
 	}
-	
+
 	const unit = 1024
 	if bytes < unit {
 		return fmt.Sprintf("%db", bytes)
 	}
-	
+
 	exp := 0
 	for n := bytes; n >= unit && exp < 3; n /= unit {
 		exp++
 	}
-	
+
 	divisor := 1
 	for i := 0; i < exp; i++ {
 		divisor *= 1024
 	}
-	
+
 	result := float64(bytes) / float64(divisor)
 	units := []string{"b", "kb", "mb", "gb"}
-	
+
 	if result >= 100 {
 		return fmt.Sprintf("%.0f%s", result, units[exp])
 	} else if result >= 10 {

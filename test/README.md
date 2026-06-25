@@ -35,7 +35,12 @@ sudo ./install.sh /usr/local
 ```bash
 # From project root
 ./test/run-tests.sh
+
+# Or via make
+make test
 ```
+
+The runner sets `PM2GO_SERVICE_PREFIX` automatically so `delete all` inside tests only targets test-created systemd units.
 
 ### Run Individual Test Suites
 ```bash
@@ -181,7 +186,7 @@ The tests follow these principles:
 **Tests hang or timeout:**
 - Some tests wait for process output - this is normal
 - Check for orphaned processes: `./pm2go list`
-- Clean up manually if needed: `./pm2go delete all`
+- Clean up manually with the same `PM2GO_SERVICE_PREFIX` if needed: `PM2GO_SERVICE_PREFIX=<test-prefix> ./pm2go delete all`
 
 ### Debug Mode
 

@@ -2,6 +2,8 @@
 
 # Basic PM2go functionality tests
 
+export PM2GO_SERVICE_PREFIX="${PM2GO_SERVICE_PREFIX:-pm2go-test-$$-}"
+
 setup() {
     # Build pm2go if not exists
     if [[ ! -f "./pm2go" ]]; then
@@ -21,7 +23,8 @@ teardown() {
 @test "pm2go version shows help" {
     run ./pm2go --help
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"PM2 Systemd Wrapper"* ]]
+    [[ "$output" == *"PM2 reimplementation using systemd"* ]]
+    [[ "$output" == *"Available Commands"* ]]
 }
 
 @test "pm2go list shows empty list initially" {

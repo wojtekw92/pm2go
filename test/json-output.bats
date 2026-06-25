@@ -2,6 +2,8 @@
 
 # PM2go JSON output and advanced features tests
 
+export PM2GO_SERVICE_PREFIX="${PM2GO_SERVICE_PREFIX:-pm2go-test-$$-}"
+
 setup() {
     # Build pm2go if not exists
     if [[ ! -f "./pm2go" ]]; then
@@ -142,7 +144,7 @@ teardown() {
     # Test with no arguments
     run ./pm2go
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"PM2 Systemd Wrapper"* ]]
+    [[ "$output" == *"PM2 reimplementation using systemd"* ]]
 }
 
 @test "pm2go list shows stopped processes" {
