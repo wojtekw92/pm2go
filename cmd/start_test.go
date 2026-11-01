@@ -1,6 +1,9 @@
 package cmd
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestParseEcosystemConfigRejectsUnsupportedFields(t *testing.T) {
 	_, err := parseEcosystemConfig([]byte(`{
@@ -29,11 +32,8 @@ func TestParseEcosystemConfigAcceptsSupportedFields(t *testing.T) {
 			"out_file": "logs/api.out.log",
 			"error_file": "logs/api.err.log",
 			"log_file": "logs/api.log",
-			"merge_logs": true,
-			"combine_logs": true,
 			"autorestart": false,
-			"restart_delay": 5000,
-			"max_restarts": 3
+			"restart_delay": 5000
 		}]
 	}`), "")
 
@@ -55,8 +55,17 @@ func TestParseEcosystemConfigAcceptsSupportedFields(t *testing.T) {
 	if ecosystem.Apps[0].RestartDelay != 5000 {
 		t.Fatalf("expected restart_delay 5000, got %d", ecosystem.Apps[0].RestartDelay)
 	}
-	if ecosystem.Apps[0].MaxRestarts != 3 {
-		t.Fatalf("expected max_restarts 3, got %d", ecosystem.Apps[0].MaxRestarts)
+	if !reflect.DeepEqual([]string(ecosystem.Apps[0].Argv), []string{"--port", "3000"}) {
+		t.Fatalf("expected string args to parse into an argument vector, got %#v", ecosystem.Apps[0].Argv)
+	}
+}
+
+func TestParseEcosystemConfigRejectsAcceptedButUnsupportedFields(t *testing.T) {
+	for _, field := range []string{"merge_logs", "combine_logs", "max_restarts"} {
+		data := []byte(`{"apps":[{"name":"api","script":"app.js","` + field + `":true}]}`)
+		if _, err := parseEcosystemConfig(data, ""); err == nil {
+			t.Fatalf("expected %s to be rejected until its PM2 semantics are implemented", field)
+		}
 	}
 }
 
@@ -81,8 +90,8 @@ func TestParseEcosystemConfigAppliesSelectedEnvironment(t *testing.T) {
 	}
 }
 
-func TestParseEcosystemConfigRequiresSelectedEnvironment(t *testing.T) {
-	_, err := parseEcosystemConfig([]byte(`{
+func TestParseEcosystemConfigAllowsMissingSelectedEnvironment(t *testing.T) {
+	ecosystem, err := parseEcosystemConfig([]byte(`{
 		"apps": [{
 			"name": "api",
 			"script": "app.js",
@@ -90,8 +99,76 @@ func TestParseEcosystemConfigRequiresSelectedEnvironment(t *testing.T) {
 		}]
 	}`), "production")
 
+	if err != nil {
+		t.Fatalf("expected missing selected env to preserve base environment: %v", err)
+	}
+	if ecosystem.Apps[0].Env["NODE_ENV"] != "development" {
+		t.Fatalf("expected base environment to remain, got %#v", ecosystem.Apps[0].Env)
+	}
+}
+
+func TestParseEcosystemConfigValidatesUnselectedEnvironmentProfiles(t *testing.T) {
+	_, err := parseEcosystemConfig([]byte(`{
+		"apps": [{
+			"name": "api",
+			"script": "app.js",
+			"env_production": "not-an-object"
+		}]
+	}`), "")
 	if err == nil {
-		t.Fatal("expected missing selected env to fail")
+		t.Fatal("expected malformed unselected environment profile to fail")
+	}
+}
+
+func TestParseEcosystemConfigRejectsNullProfilesAndTrailingContent(t *testing.T) {
+	for _, data := range [][]byte{
+		[]byte(`{"apps":[{"name":"api","script":"app.js","env_production":null}]}`),
+		[]byte(`{"apps":null}`),
+		[]byte(`{"apps":[]} {"apps":[]}`),
+		[]byte(`{"apps":[null]}`),
+		[]byte(`{"apps":[{"name":"api","script":null}]}`),
+		[]byte(`{"apps":[{"name":"api"}]}`),
+	} {
+		if _, err := parseEcosystemConfig(data, ""); err == nil {
+			t.Fatalf("expected invalid ecosystem input to fail: %s", data)
+		}
+	}
+}
+
+func TestParseEcosystemConfigAcceptsArrayArguments(t *testing.T) {
+	ecosystem, err := parseEcosystemConfig([]byte(`{
+		"apps": [{"name":"api","script":"app.js","args":["", "--name", "worker", "hello world"]}]
+	}`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"", "--name", "worker", "hello world"}
+	if !reflect.DeepEqual([]string(ecosystem.Apps[0].Argv), expected) {
+		t.Fatalf("expected %#v, got %#v", expected, ecosystem.Apps[0].Argv)
+	}
+}
+
+func TestParseStartApplicationPreservesArgumentsAfterDash(t *testing.T) {
+	config, err := parseStartApplication([]string{"app.js", "--name", "worker", ""}, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := []string{"--name", "worker", ""}
+	if config.Script != "app.js" || !reflect.DeepEqual([]string(config.Argv), expected) {
+		t.Fatalf("unexpected parsed config: %#v", config)
+	}
+}
+
+func TestParseStartApplicationSupportsLegacyInterpreterSyntax(t *testing.T) {
+	config, err := parseStartApplication([]string{"python3", "app.py", "--name", "worker"}, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Interpreter != "python3" || config.Script != "app.py" {
+		t.Fatalf("unexpected interpreter config: %#v", config)
+	}
+	if !reflect.DeepEqual([]string(config.Argv), []string{"--name", "worker"}) {
+		t.Fatalf("unexpected arguments: %#v", config.Argv)
 	}
 }
 

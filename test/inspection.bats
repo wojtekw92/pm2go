@@ -79,8 +79,7 @@ teardown() {
 }
 
 @test "pm2go env shows process environment variables" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-command
+    run ./pm2go start test/fixtures/test-app.py --name test-env-command --env TEST_VAR="test value"
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start  
@@ -90,13 +89,12 @@ teardown() {
     run ./pm2go env test-env-command
     [[ "$status" -eq 0 ]]
     
-    # Should show environment variables (at least PATH, HOME, etc.)
-    [[ "$output" == *"PATH"* ]]
+    [[ "$output" == *"TEST_VAR"* ]]
+    [[ "$output" == *"test value"* ]]
 }
 
 @test "pm2go env works with process ID" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-id
+    run ./pm2go start test/fixtures/test-app.py --name test-env-id --env TEST_VAR="test value"
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
@@ -105,12 +103,11 @@ teardown() {
     # Show environment variables by ID
     run ./pm2go env 0
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"PATH"* ]]
+    [[ "$output" == *"TEST_VAR"* ]]
 }
 
 @test "pm2go env shows custom environment variables" {
-    # Start a process with the test environment variables we set
-    run ./pm2go start test/fixtures/test-app.py --name test-custom-env
+    run ./pm2go start test/fixtures/test-app.py --name test-custom-env --env TEST_VAR="test value" --env ANOTHER_TEST=another
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start

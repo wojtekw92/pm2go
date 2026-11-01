@@ -58,7 +58,7 @@ func TestSQLiteStorePersistsMachinesAndResults(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreDeliversPendingCommandsOnce(t *testing.T) {
+func TestSQLiteStoreLeasesPendingCommandsUntilAck(t *testing.T) {
 	store, err := OpenSQLiteStore(filepath.Join(t.TempDir(), "hub.db"))
 	if err != nil {
 		t.Fatalf("failed to open sqlite store: %v", err)
@@ -101,7 +101,22 @@ func TestSQLiteStoreDeliversPendingCommandsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to list pending commands after delivery: %v", err)
 	}
+	if len(pending) != 1 {
+		t.Fatalf("expected leased command to remain pending until ack, got %#v", pending)
+	}
+
+	_, err = store.UpdateHeartbeat(agent.HeartbeatRequest{
+		MachineID: "worker-1",
+		Results:   []agent.CommandResult{{CommandID: command.ID, Action: "restart", Target: "api", OK: true}},
+	})
+	if err != nil {
+		t.Fatalf("failed to ack command result: %v", err)
+	}
+	pending, err = store.ListPendingCommands("worker-1")
+	if err != nil {
+		t.Fatalf("failed to list pending commands after ack: %v", err)
+	}
 	if len(pending) != 0 {
-		t.Fatalf("expected no pending commands after delivery, got %#v", pending)
+		t.Fatalf("expected no pending commands after ack, got %#v", pending)
 	}
 }

@@ -102,8 +102,7 @@ teardown() {
     # Delete all
     run ./pm2go delete all
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"Deleted app-1"* ]]
-    [[ "$output" == *"Deleted app-2"* ]]
+    [[ "$output" == *"Deleted 2 processes"* ]]
     
     # Verify list is empty
     run ./pm2go list

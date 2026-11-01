@@ -23,7 +23,7 @@ teardown() {
 @test "pm2go version shows help" {
     run ./pm2go --help
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"PM2 reimplementation using systemd"* ]]
+    [[ "$output" == *"Usage:"* ]]
     [[ "$output" == *"Available Commands"* ]]
 }
 

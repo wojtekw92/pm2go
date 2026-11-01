@@ -144,7 +144,7 @@ teardown() {
     # Test with no arguments
     run ./pm2go
     [[ "$status" -eq 0 ]]
-    [[ "$output" == *"PM2 reimplementation using systemd"* ]]
+    [[ "$output" == *"Usage:"* ]]
 }
 
 @test "pm2go list shows stopped processes" {

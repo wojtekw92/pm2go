@@ -1,19 +1,25 @@
 package systemd
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // Manager handles systemd operations for PM2-style process management
 type Manager struct {
-	userMode bool
-	prefix   string // prefix for service names to avoid conflicts
+	userMode   bool
+	prefix     string // prefix for service names to avoid conflicts
+	serviceDir string
+	initErr    error
 }
 
 // NewManager creates a new systemd manager instance
@@ -22,16 +28,44 @@ func NewManager() *Manager {
 	if prefix == "" {
 		prefix = "pm2-"
 	}
-
-	return &Manager{
-		userMode: os.Getuid() != 0, // use user services if not root
-		prefix:   prefix,
+	manager := &Manager{userMode: os.Getuid() != 0, prefix: prefix}
+	if err := validateServicePrefix(prefix); err != nil {
+		manager.initErr = err
 	}
+	if manager.userMode {
+		if configHome := os.Getenv("XDG_CONFIG_HOME"); configHome != "" {
+			if !filepath.IsAbs(configHome) {
+				manager.initErr = fmt.Errorf("XDG_CONFIG_HOME must be an absolute path")
+			} else {
+				manager.serviceDir = filepath.Join(configHome, "systemd/user")
+			}
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				manager.initErr = fmt.Errorf("failed to determine user home directory: %v", err)
+			} else if !filepath.IsAbs(home) {
+				manager.initErr = fmt.Errorf("user home directory must be an absolute path")
+			} else {
+				manager.serviceDir = filepath.Join(home, ".config/systemd/user")
+			}
+		}
+	} else {
+		manager.serviceDir = "/etc/systemd/system"
+	}
+	return manager
 }
 
-// serviceName returns the systemd service name for an app
-func (m *Manager) serviceName(appName string) string {
-	return m.prefix + escapeUnitNamePart(appName)
+func validateServicePrefix(prefix string) error {
+	if prefix == "" || strings.Contains(prefix, "..") {
+		return fmt.Errorf("invalid PM2GO_SERVICE_PREFIX %q", prefix)
+	}
+	for _, r := range prefix {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("_.:-", r) {
+			continue
+		}
+		return fmt.Errorf("invalid PM2GO_SERVICE_PREFIX %q", prefix)
+	}
+	return nil
 }
 
 // serviceNameWithID returns the systemd service name with ID for an app
@@ -95,132 +129,126 @@ func unescapeUnitNamePart(value string) string {
 	return string(bytes)
 }
 
-// getNextAvailableID finds the next available ID
-func (m *Manager) getNextAvailableID() int {
-	processes, err := m.List()
+// managedServiceNames discovers definitions without querying runtime state.
+func (m *Manager) managedServiceNames() ([]string, error) {
+	if m.initErr != nil {
+		return nil, m.initErr
+	}
+	files, err := filepath.Glob(filepath.Join(m.getServiceDir(), m.prefix+"*.service"))
 	if err != nil {
-		return 0
+		return nil, err
 	}
-
-	maxID := -1
-	for _, process := range processes {
-		if process.PM2Env.ID > maxID {
-			maxID = process.PM2Env.ID
-		}
+	services := make([]string, 0, len(files))
+	for _, file := range files {
+		services = append(services, strings.TrimSuffix(filepath.Base(file), ".service"))
 	}
-
-	return maxID + 1
+	return services, nil
 }
 
 // findServiceByIdentifier finds service name by ID or name
 func (m *Manager) findServiceByIdentifier(identifier string) (string, error) {
-	processes, err := m.List()
+	services, err := m.managedServiceNames()
 	if err != nil {
 		return "", err
 	}
-
-	// Try to parse as ID first
-	if id, err := strconv.Atoi(identifier); err == nil {
-		for _, process := range processes {
-			if process.PM2Env.ID == id {
-				return m.serviceNameWithID(process.PM2Env.ID, process.Name), nil
-			}
+	id, idErr := strconv.Atoi(identifier)
+	for _, service := range services {
+		serviceID, name, err := m.parseServiceName(service)
+		if err != nil {
+			continue
 		}
-		return "", fmt.Errorf("process with ID %d not found", id)
-	}
-
-	// Try as name
-	for _, process := range processes {
-		if process.Name == identifier {
-			return m.serviceNameWithID(process.PM2Env.ID, process.Name), nil
+		if (idErr == nil && serviceID == id) || (idErr != nil && name == identifier) {
+			return service, nil
 		}
 	}
-
 	return "", fmt.Errorf("process '%s' not found", identifier)
-}
-
-// checkDuplicateName checks if a name already exists among running processes
-func (m *Manager) checkDuplicateName(name string) error {
-	processes, err := m.List()
-	if err != nil {
-		return err
-	}
-
-	for _, process := range processes {
-		if process.Name == name && process.PM2Env.Status != "stopped" {
-			return fmt.Errorf("process with name '%s' already exists (ID: %d)", name, process.PM2Env.ID)
-		}
-	}
-
-	return nil
 }
 
 // Start creates and starts a systemd service for the given app config
 func (m *Manager) Start(config AppConfig) error {
-	// Check for duplicate names
-	if err := m.checkDuplicateName(config.Name); err != nil {
-		return err
-	}
+	return m.withMutationLock(func() error {
+		if config.Name == "" {
+			return fmt.Errorf("application name is required")
+		}
+		if config.Script == "" {
+			return fmt.Errorf("application script is required")
+		}
+		services, err := m.managedServiceNames()
+		if err != nil {
+			return err
+		}
+		nextID := 0
+		for _, service := range services {
+			id, name, err := m.parseServiceName(service)
+			if err != nil {
+				return err
+			}
+			if name == config.Name {
+				return fmt.Errorf("process with name '%s' already exists (ID: %d)", name, id)
+			}
+			if config.ID != 0 && config.ID == id {
+				return fmt.Errorf("process with ID %d already exists", config.ID)
+			}
+			if id >= nextID {
+				nextID = id + 1
+			}
+		}
+		if config.ID == 0 {
+			config.ID = nextID
+		}
+		config.CreatedAt = time.Now().UnixMilli()
 
-	// Assign ID if not set
-	if config.ID == 0 {
-		config.ID = m.getNextAvailableID()
-	}
+		if err := m.prepareLogDirectories(config); err != nil {
+			return err
+		}
 
-	serviceName := m.serviceNameWithID(config.ID, config.Name)
+		serviceName := m.serviceNameWithID(config.ID, config.Name)
+		servicePath := filepath.Join(m.getServiceDir(), serviceName+".service")
+		if _, err := os.Lstat(servicePath); err == nil {
+			return fmt.Errorf("service file %s already exists", servicePath)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("failed to inspect service file: %v", err)
+		}
 
-	// Generate systemd service file content
-	serviceContent := m.generateServiceFile(config)
-
-	// Write service file
-	serviceDir := m.getServiceDir()
-	servicePath := filepath.Join(serviceDir, serviceName+".service")
-
-	if err := os.WriteFile(servicePath, []byte(serviceContent), 0644); err != nil {
-		return fmt.Errorf("failed to write service file: %v", err)
-	}
-
-	// Reload systemd and start service
-	if err := m.systemdReload(); err != nil {
-		return fmt.Errorf("failed to reload systemd: %v", err)
-	}
-
-	if err := m.systemdCommand("start", serviceName); err != nil {
-		return fmt.Errorf("failed to start service: %v", err)
-	}
-
-	if err := m.systemdCommand("enable", serviceName); err != nil {
-		return fmt.Errorf("failed to enable service: %v", err)
-	}
-
-	return nil
+		if err := atomicWriteFile(servicePath, []byte(m.generateServiceFile(config)), 0600); err != nil {
+			return fmt.Errorf("failed to write service file: %v", err)
+		}
+		if err := m.systemdReload(); err != nil {
+			return fmt.Errorf("unit written to %s, but systemd reload failed: %w", servicePath, err)
+		}
+		if err := m.systemdCommand("start", serviceName); err != nil {
+			return fmt.Errorf("failed to start %s; unit retained at %s: %w", config.Name, servicePath, err)
+		}
+		return nil
+	})
 }
 
 // Stop stops a systemd service
 func (m *Manager) Stop(identifier string) error {
-	if identifier == "all" {
-		return m.stopAll()
-	}
+	return m.withMutationLock(func() error {
+		if identifier == "all" {
+			return m.stopAll()
+		}
 
-	serviceName, err := m.findServiceByIdentifier(identifier)
-	if err != nil {
-		return err
-	}
-	return m.systemdCommand("stop", serviceName)
+		serviceName, err := m.findServiceByIdentifier(identifier)
+		if err != nil {
+			return err
+		}
+		return m.systemdCommand("stop", serviceName)
+	})
 }
 
 // stopAll stops all pm2go managed services without deleting their unit files.
 func (m *Manager) stopAll() error {
-	processes, err := m.List()
+	services, err := m.managedServiceNames()
 	if err != nil {
 		return err
 	}
 
 	var errors []string
-	for _, process := range processes {
-		serviceName := m.serviceNameWithID(process.PM2Env.ID, process.Name)
+	for _, serviceName := range services {
 		if err := m.systemdCommand("stop", serviceName); err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %v", process.Name, err))
+			errors = append(errors, fmt.Sprintf("%s: %v", serviceName, err))
 		}
 	}
 
@@ -230,13 +258,56 @@ func (m *Manager) stopAll() error {
 	return nil
 }
 
+// Save records the current online process set as native systemd target membership.
+func (m *Manager) Save() error {
+	return m.withMutationLock(func() error {
+		services, err := m.managedServiceNames()
+		if err != nil {
+			return err
+		}
+
+		online := make([]string, 0, len(services))
+		for _, service := range services {
+			switch m.getServiceStatus(service) {
+			case "unknown":
+				return fmt.Errorf("cannot save while status for %s is unknown", service)
+			case "online":
+				online = append(online, service)
+			}
+		}
+		return m.replaceSavedServices(online, services)
+	})
+}
+
+// Resurrect starts the existing units referenced by the saved systemd target.
+func (m *Manager) Resurrect() error {
+	return m.withMutationLock(func() error {
+		var errors []string
+		services, err := m.savedServices()
+		if err != nil {
+			errors = append(errors, err.Error())
+		}
+		for _, serviceName := range services {
+			if err := m.systemdCommand("start", serviceName); err != nil {
+				errors = append(errors, fmt.Sprintf("%s: %v", serviceName, err))
+			}
+		}
+		if len(errors) > 0 {
+			return fmt.Errorf("failed to resurrect applications: %s", strings.Join(errors, "; "))
+		}
+		return nil
+	})
+}
+
 // Restart restarts an existing service by ID
 func (m *Manager) Restart(id int) error {
-	serviceName, err := m.findServiceByIdentifier(strconv.Itoa(id))
-	if err != nil {
-		return err
-	}
-	return m.systemdCommand("restart", serviceName)
+	return m.withMutationLock(func() error {
+		serviceName, err := m.findServiceByIdentifier(strconv.Itoa(id))
+		if err != nil {
+			return err
+		}
+		return m.systemdCommand("restart", serviceName)
+	})
 }
 
 // SendSignal sends a Unix signal to a managed service's main process.
@@ -246,73 +317,66 @@ func (m *Manager) SendSignal(identifier string, signal string) error {
 		return err
 	}
 
-	cmd := []string{"systemctl"}
-	if m.userMode {
-		cmd = append(cmd, "--user")
-	}
-	cmd = append(cmd, "kill", "--kill-who=main", "--signal="+signal, serviceName)
-
-	return runCommand(cmd)
+	return m.systemdCommand("kill", "--kill-who=main", "--signal="+signal, serviceName)
 }
 
 // Delete stops and removes a systemd service
 func (m *Manager) Delete(identifier string) error {
-	if identifier == "all" {
-		return m.deleteAll()
-	}
+	return m.withMutationLock(func() error {
+		if identifier == "all" {
+			return m.deleteAll()
+		}
 
-	// Find service by name or ID
-	serviceName, err := m.findServiceByIdentifier(identifier)
-	if err != nil {
-		return err
-	}
-
-	// Stop service first
-	m.systemdCommand("stop", serviceName)
-	m.systemdCommand("disable", serviceName)
-
-	// Remove service file
-	serviceDir := m.getServiceDir()
-	servicePath := filepath.Join(serviceDir, serviceName+".service")
-	os.Remove(servicePath)
-
-	return m.systemdReload()
+		serviceName, err := m.findServiceByIdentifier(identifier)
+		if err != nil {
+			return err
+		}
+		return m.deleteServices([]string{serviceName})
+	})
 }
 
 // deleteAll removes all pm2go managed services
 func (m *Manager) deleteAll() error {
-	processes, err := m.List()
+	services, err := m.managedServiceNames()
 	if err != nil {
 		return err
 	}
+	return m.deleteServices(services)
+}
 
-	for _, process := range processes {
-		serviceName := m.serviceNameWithID(process.PM2Env.ID, process.Name)
-		m.systemdCommand("stop", serviceName)
-		m.systemdCommand("disable", serviceName)
-
-		serviceDir := m.getServiceDir()
-		servicePath := filepath.Join(serviceDir, serviceName+".service")
-		os.Remove(servicePath)
+func (m *Manager) deleteServices(serviceNames []string) error {
+	var errors []string
+	for _, serviceName := range serviceNames {
+		if err := m.systemdCommand("stop", serviceName); err != nil {
+			errors = append(errors, fmt.Sprintf("%s stop: %v", serviceName, err))
+			continue
+		}
+		if err := m.removeServiceLinks(serviceName); err != nil {
+			errors = append(errors, fmt.Sprintf("%s links: %v", serviceName, err))
+			continue
+		}
+		if err := removeFileIfExists(filepath.Join(m.getServiceDir(), serviceName+".service")); err != nil {
+			errors = append(errors, fmt.Sprintf("%s unit: %v", serviceName, err))
+		}
 	}
-
-	return m.systemdReload()
+	if err := m.systemdReload(); err != nil {
+		errors = append(errors, fmt.Sprintf("unit files updated, but systemd reload failed: %v", err))
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("delete incomplete: %s", strings.Join(errors, "; "))
+	}
+	return nil
 }
 
 // List returns a list of all managed processes
 func (m *Manager) List() ([]ProcessInfo, error) {
-	// Get all service files instead of just active units
-	serviceDir := m.getServiceDir()
-	files, err := filepath.Glob(filepath.Join(serviceDir, m.prefix+"*.service"))
+	services, err := m.managedServiceNames()
 	if err != nil {
 		return nil, err
 	}
 
 	processes := []ProcessInfo{}
-	for _, filePath := range files {
-		fileName := filepath.Base(filePath)
-		serviceName := strings.TrimSuffix(fileName, ".service")
-
+	for _, serviceName := range services {
 		// Parse ID and name from service name
 		id, appName, err := m.parseServiceName(serviceName)
 		if err != nil {
@@ -325,39 +389,45 @@ func (m *Manager) List() ([]ProcessInfo, error) {
 		// Get PID for the service (will be 0 if stopped)
 		pid := m.getServicePID(serviceName)
 
-		// Get memory usage, CPU, and uptime (will be 0 if stopped)
+		// Get memory usage, CPU, and process start time (will be 0 if stopped)
 		memory := m.getServiceMemory(pid)
 		cpu := m.getServiceCPU(pid)
-		uptime := m.getServiceUptime(serviceName)
-		createdAt := time.Now().Unix()*1000 - uptime
+		startedAt := m.getServiceStartTime(serviceName)
 
 		// Read service configuration for additional details
 		config := m.readServiceConfig(serviceName)
+		createdAt := config.CreatedAt
+		if createdAt == 0 {
+			filePath := filepath.Join(m.getServiceDir(), serviceName+".service")
+			if info, err := os.Stat(filePath); err == nil {
+				createdAt = info.ModTime().UnixMilli()
+			}
+		}
 
 		process := ProcessInfo{
 			PID:  pid,
 			Name: appName,
+			PMID: id,
 			PM2Env: PM2Env{
 				ID:               id,
 				Name:             appName,
-				ExecMode:         "fork",
+				ExecMode:         "fork_mode",
 				Status:           status,
-				PMUptime:         uptime,
+				PMUptime:         startedAt,
 				CreatedAt:        createdAt,
 				RestartTime:      0,
 				UnstableRestarts: 0,
 				Versioning:       nil,
-				Node: PM2Node{
-					Version: "unknown",
-				},
-				PMExecPath:   config.Script,
-				PMCwd:        config.Cwd,
-				PMOutLogPath: config.OutLogPath,
-				PMErrLogPath: config.ErrLogPath,
-				PMPidPath:    config.PidPath,
-				Interpreter:  config.Interpreter,
-				Args:         config.Args,
-				Env:          config.Env,
+				Node:             PM2Node{Version: "unknown"},
+				NodeVersion:      "unknown",
+				PMExecPath:       config.Script,
+				PMCwd:            config.Cwd,
+				PMOutLogPath:     config.OutLogPath,
+				PMErrLogPath:     config.ErrLogPath,
+				PMPidPath:        config.PidPath,
+				Interpreter:      config.Interpreter,
+				Args:             config.Args,
+				Env:              config.Env,
 			},
 			Monit: PM2Monit{
 				Memory: memory,
@@ -387,11 +457,24 @@ func (m *Manager) readServiceConfig(serviceName string) ServiceConfig {
 	lines := strings.Split(string(data), "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
 			continue
 		}
 
-		if strings.HasPrefix(line, "ExecStart=") {
+		if strings.HasPrefix(line, "# PM2Go-Script=") {
+			config.Script = decodeMetadataString(strings.TrimPrefix(line, "# PM2Go-Script="))
+		} else if strings.HasPrefix(line, "# PM2Go-Interpreter=") {
+			config.Interpreter = decodeMetadataString(strings.TrimPrefix(line, "# PM2Go-Interpreter="))
+		} else if strings.HasPrefix(line, "# PM2Go-Args=") {
+			encoded := strings.TrimPrefix(line, "# PM2Go-Args=")
+			if data, err := base64.RawStdEncoding.DecodeString(encoded); err == nil {
+				_ = json.Unmarshal(data, &config.Args)
+			}
+		} else if strings.HasPrefix(line, "# PM2Go-CreatedAt=") {
+			config.CreatedAt, _ = strconv.ParseInt(strings.TrimPrefix(line, "# PM2Go-CreatedAt="), 10, 64)
+		} else if strings.HasPrefix(line, "#") {
+			continue
+		} else if strings.HasPrefix(line, "ExecStart=") && config.Script == "" {
 			execStart := strings.TrimPrefix(line, "ExecStart=")
 			// Parse the exec command to extract script and interpreter
 			parts := splitCommandLine(execStart)
@@ -400,7 +483,7 @@ func (m *Manager) readServiceConfig(serviceName string) ServiceConfig {
 				if len(parts) > 1 {
 					config.Script = parts[1]
 					if len(parts) > 2 {
-						config.Args = strings.Join(parts[2:], " ")
+						config.Args = append(AppArgs(nil), parts[2:]...)
 					}
 				}
 			}
@@ -517,16 +600,19 @@ func splitCommandLine(input string) []string {
 	var current strings.Builder
 	var quote rune
 	escaped := false
+	tokenStarted := false
 
 	for _, r := range input {
 		if escaped {
 			current.WriteRune(r)
 			escaped = false
+			tokenStarted = true
 			continue
 		}
 
 		if r == '\\' {
 			escaped = true
+			tokenStarted = true
 			continue
 		}
 
@@ -541,24 +627,27 @@ func splitCommandLine(input string) []string {
 
 		if r == '\'' || r == '"' {
 			quote = r
+			tokenStarted = true
 			continue
 		}
 
 		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			if current.Len() > 0 {
+			if tokenStarted {
 				result = append(result, current.String())
 				current.Reset()
+				tokenStarted = false
 			}
 			continue
 		}
 
 		current.WriteRune(r)
+		tokenStarted = true
 	}
 
 	if escaped {
 		current.WriteRune('\\')
 	}
-	if current.Len() > 0 {
+	if tokenStarted {
 		result = append(result, current.String())
 	}
 
@@ -642,7 +731,7 @@ func parseSystemdDurationMillis(value string) int {
 
 func formatRestartSec(restartDelayMillis int) string {
 	if restartDelayMillis <= 0 {
-		return "3"
+		return "0"
 	}
 	if restartDelayMillis%1000 == 0 {
 		return strconv.Itoa(restartDelayMillis / 1000)
@@ -722,6 +811,7 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 	startLimits := startLimitLines(config.MaxRestarts)
 
 	var execArgs []string
+	appArgs := configArguments(config)
 
 	if config.Interpreter != "" {
 		// Use explicit interpreter: "python3 script.py args"
@@ -742,8 +832,8 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 		execArgs = append(execArgs, interpreterPath)
 		execArgs = append(execArgs, interpreterFields[1:]...)
 		execArgs = append(execArgs, config.Script)
-		if config.Args != "" {
-			execArgs = append(execArgs, splitCommandLine(config.Args)...)
+		if len(appArgs) > 0 {
+			execArgs = append(execArgs, appArgs...)
 		}
 	} else {
 		// Auto-detect interpreter or use script directly
@@ -767,76 +857,153 @@ func (m *Manager) generateServiceFile(config AppConfig) string {
 			execArgs = append(execArgs, config.Script)
 		}
 
-		if config.Args != "" {
-			execArgs = append(execArgs, splitCommandLine(config.Args)...)
+		if len(appArgs) > 0 {
+			execArgs = append(execArgs, appArgs...)
 		}
 	}
 
 	execStart := joinSystemdArgs(execArgs)
+	metadata := serviceMetadata(config)
 
-	var service string
-	if m.userMode {
-		// In user mode, don't specify User= as it causes "operation not permitted"
-		service = fmt.Sprintf(`[Unit]
+	userLine := ""
+	if !m.userMode {
+		userLine = "User=" + m.getCurrentUser() + "\n"
+	}
+	environment := make([]string, 0, len(config.Env))
+	for key, value := range config.Env {
+		environment = append(environment, "Environment="+quoteSystemdValue(key+"="+value))
+	}
+
+	return fmt.Sprintf(`[Unit]
+%s
 Description=PM2 App: %s
 After=network.target
 %s
 
 [Service]
 Type=simple
-WorkingDirectory=%s
+%sWorkingDirectory=%s
 ExecStart=%s
 Restart=%s
 RestartSec=%s
 StandardOutput=%s
 StandardError=%s
-
-[Install]
-WantedBy=default.target
-`, config.Name, startLimits, systemdPathValue(workingDir), execStart, restart, restartSec, systemdLogDirective(outLog), systemdLogDirective(errLog))
-	} else {
-		// In system mode, specify the user
-		service = fmt.Sprintf(`[Unit]
-Description=PM2 App: %s
-After=network.target
 %s
 
-[Service]
-Type=simple
-User=%s
-WorkingDirectory=%s
-ExecStart=%s
-Restart=%s
-RestartSec=%s
-StandardOutput=%s
-StandardError=%s
-
 [Install]
-WantedBy=default.target
-`, config.Name, startLimits, m.getCurrentUser(), systemdPathValue(workingDir), execStart, restart, restartSec, systemdLogDirective(outLog), systemdLogDirective(errLog))
-	}
+WantedBy=%s
+`, metadata, config.Name, startLimits, userLine, systemdPathValue(workingDir), execStart, restart, restartSec, systemdLogDirective(outLog), systemdLogDirective(errLog), strings.Join(environment, "\n"), m.savedTargetName())
+}
 
-	// Add environment variables if present
-	if config.Env != nil {
-		envLines := ""
-		for key, value := range config.Env {
-			envLines += fmt.Sprintf("Environment=%s\n", quoteSystemdValue(key+"="+value))
-		}
-		service = strings.Replace(service, "[Install]", envLines+"\n[Install]", 1)
-	}
+func serviceMetadata(config AppConfig) string {
+	args, _ := json.Marshal(configArguments(config))
+	return strings.Join([]string{
+		"# PM2Go-Script=" + encodeMetadataString(config.Script),
+		"# PM2Go-Interpreter=" + encodeMetadataString(config.Interpreter),
+		"# PM2Go-Args=" + base64.RawStdEncoding.EncodeToString(args),
+		"# PM2Go-CreatedAt=" + strconv.FormatInt(config.CreatedAt, 10),
+	}, "\n")
+}
 
-	return service
+func configArguments(config AppConfig) AppArgs {
+	if config.Argv != nil {
+		return config.Argv
+	}
+	return splitCommandLine(config.Args)
+}
+
+func encodeMetadataString(value string) string {
+	return base64.RawStdEncoding.EncodeToString([]byte(value))
+}
+
+func decodeMetadataString(value string) string {
+	decoded, err := base64.RawStdEncoding.DecodeString(value)
+	if err != nil {
+		return ""
+	}
+	return string(decoded)
 }
 
 // getServiceDir returns the directory where service files should be stored
 func (m *Manager) getServiceDir() string {
-	if m.userMode {
-		home, _ := os.UserHomeDir()
-		dir := filepath.Join(home, ".config/systemd/user")
-		os.MkdirAll(dir, 0755)
-		return dir
+	return m.serviceDir
+}
+
+func (m *Manager) withMutationLock(operation func() error) error {
+	if m.initErr != nil {
+		return m.initErr
 	}
-	return "/etc/systemd/system"
+	serviceDir := m.getServiceDir()
+	if err := os.MkdirAll(serviceDir, 0700); err != nil {
+		return fmt.Errorf("failed to create service directory: %v", err)
+	}
+
+	lock, err := os.OpenFile(filepath.Join(serviceDir, ".pm2go.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return fmt.Errorf("failed to open process registry lock: %v", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("failed to lock process registry: %v", err)
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	return operation()
+}
+
+func atomicWriteFile(path string, data []byte, mode os.FileMode) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".pm2go-unit-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+func (m *Manager) prepareLogDirectories(config AppConfig) error {
+	workingDir := config.Cwd
+	if workingDir == "" {
+		workingDir, _ = os.Getwd()
+	}
+	outLog, errLog := resolveLogPaths(config, workingDir)
+	for _, path := range []string{outLog, errLog} {
+		if path == "" || path == "/dev/null" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return fmt.Errorf("failed to create log directory for %s: %v", path, err)
+		}
+	}
+	return nil
 }
 
 // getCurrentUser returns the current username
@@ -849,28 +1016,22 @@ func (m *Manager) getCurrentUser() string {
 
 // systemdReload reloads the systemd daemon
 func (m *Manager) systemdReload() error {
-	cmd := []string{"systemctl"}
-	if m.userMode {
-		cmd = append(cmd, "--user")
-	}
-	cmd = append(cmd, "daemon-reload")
-
-	return runCommand(cmd)
+	return m.systemdCommand("daemon-reload")
 }
 
-// systemdCommand executes a systemctl command
-func (m *Manager) systemdCommand(action, serviceName string) error {
+// systemdCommand executes a systemctl command and waits for its result.
+func (m *Manager) systemdCommand(args ...string) error {
 	cmd := []string{"systemctl"}
 	if m.userMode {
 		cmd = append(cmd, "--user")
 	}
-	cmd = append(cmd, action, serviceName)
+	cmd = append(cmd, args...)
 
 	return runCommand(cmd)
 }
 
 func runCommand(cmd []string) error {
-	output, err := exec.Command(cmd[0], cmd[1:]...).CombinedOutput()
+	output, err := runCommandOutput(cmd)
 	if err == nil {
 		return nil
 	}
@@ -882,6 +1043,16 @@ func runCommand(cmd []string) error {
 	return fmt.Errorf("%s: %w: %s", strings.Join(cmd, " "), err, message)
 }
 
+func runCommandOutput(cmd []string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, cmd[0], cmd[1:]...).CombinedOutput()
+	if ctx.Err() == context.DeadlineExceeded {
+		return output, fmt.Errorf("command timed out after 30s")
+	}
+	return output, err
+}
+
 // getServicePID returns the PID of a service
 func (m *Manager) getServicePID(serviceName string) int {
 	cmd := []string{"systemctl"}
@@ -890,7 +1061,7 @@ func (m *Manager) getServicePID(serviceName string) int {
 	}
 	cmd = append(cmd, "show", serviceName, "--property=MainPID", "--value")
 
-	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	output, err := runCommandOutput(cmd)
 	if err != nil {
 		return 0
 	}
@@ -909,12 +1080,11 @@ func (m *Manager) getServiceStatus(serviceName string) string {
 	if m.userMode {
 		cmd = append(cmd, "--user")
 	}
-	cmd = append(cmd, "is-active", serviceName)
+	cmd = append(cmd, "show", serviceName, "--property=ActiveState", "--value")
 
-	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	output, err := runCommandOutput(cmd)
 	if err != nil {
-		// Check if service is loaded but not active
-		return "stopped"
+		return "unknown"
 	}
 
 	status := strings.TrimSpace(string(output))
@@ -1012,32 +1182,38 @@ func (m *Manager) getServiceCPU(pid int) int {
 	return int(cpuUsage + 0.5) // Round to nearest integer
 }
 
-// getServiceUptime returns uptime in milliseconds for a service
-func (m *Manager) getServiceUptime(serviceName string) int64 {
+// getServiceStartTime returns the active-enter time as epoch milliseconds.
+func (m *Manager) getServiceStartTime(serviceName string) int64 {
 	cmd := []string{"systemctl"}
 	if m.userMode {
 		cmd = append(cmd, "--user")
 	}
-	cmd = append(cmd, "show", serviceName, "--property=ActiveEnterTimestamp", "--value")
+	cmd = append(cmd, "show", serviceName, "--property=ActiveEnterTimestampMonotonic", "--value")
 
-	output, err := exec.Command(cmd[0], cmd[1:]...).Output()
+	output, err := runCommandOutput(cmd)
 	if err != nil {
 		return 0
 	}
 
-	timestamp := strings.TrimSpace(string(output))
-	if timestamp == "" || timestamp == "n/a" {
+	monotonicMicros, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil || monotonicMicros <= 0 {
 		return 0
 	}
 
-	// Parse systemd timestamp format
-	startTime, err := time.Parse("Mon 2006-01-02 15:04:05 MST", timestamp)
+	uptimeData, err := os.ReadFile("/proc/uptime")
 	if err != nil {
 		return 0
 	}
-
-	uptime := time.Since(startTime)
-	return int64(uptime.Milliseconds())
+	uptimeFields := strings.Fields(string(uptimeData))
+	if len(uptimeFields) == 0 {
+		return 0
+	}
+	uptimeSeconds, err := strconv.ParseFloat(uptimeFields[0], 64)
+	if err != nil {
+		return 0
+	}
+	bootTime := time.Now().Add(-time.Duration(uptimeSeconds * float64(time.Second)))
+	return bootTime.Add(time.Duration(monotonicMicros) * time.Microsecond).UnixMilli()
 }
 
 // mapSystemdStatus maps systemd status to PM2 status

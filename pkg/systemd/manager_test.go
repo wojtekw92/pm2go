@@ -1,14 +1,15 @@
 package systemd
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestSplitCommandLinePreservesQuotedArguments(t *testing.T) {
-	args := splitCommandLine("--interval 1 --message 'App 1 output' --flag=quoted\\ value")
-	expected := []string{"--interval", "1", "--message", "App 1 output", "--flag=quoted value"}
+	args := splitCommandLine("'' --interval 1 --message 'App 1 output' --flag=quoted\\ value")
+	expected := []string{"", "--interval", "1", "--message", "App 1 output", "--flag=quoted value"}
 
 	if len(args) != len(expected) {
 		t.Fatalf("expected %d args, got %d: %#v", len(expected), len(args), args)
@@ -62,7 +63,7 @@ func TestGenerateServiceFileQuotesExecStartAndEnvironment(t *testing.T) {
 		Script:      "script with spaces.py",
 		Interpreter: "python3",
 		Cwd:         "/tmp/path with spaces",
-		Args:        "--message 'hello world'",
+		Args:        "--message 'hello world' '[Install]'",
 		Env: map[string]string{
 			"SPECIAL": "value with spaces % and \"quotes\"",
 		},
@@ -72,6 +73,7 @@ func TestGenerateServiceFileQuotesExecStartAndEnvironment(t *testing.T) {
 		"WorkingDirectory=/tmp/path\\x20with\\x20spaces",
 		"\"script with spaces.py\"",
 		"\"hello world\"",
+		"\"[Install]\"",
 		"Environment=\"SPECIAL=value with spaces %% and \\\"quotes\\\"\"",
 	}
 
@@ -79,6 +81,154 @@ func TestGenerateServiceFileQuotesExecStartAndEnvironment(t *testing.T) {
 		if !strings.Contains(service, check) {
 			t.Fatalf("expected service file to contain %q:\n%s", check, service)
 		}
+	}
+}
+
+func TestGenerateServiceFilePreservesEmptyAndFlagArguments(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := NewManager()
+
+	service := manager.generateServiceFile(AppConfig{
+		Name:      "api",
+		Script:    "app.js",
+		Argv:      AppArgs{"", "--name", "worker", "hello world"},
+		CreatedAt: 1234,
+	})
+
+	checks := []string{`""`, `"--name"`, `"worker"`, `"hello world"`, "# PM2Go-CreatedAt=1234"}
+	for _, check := range checks {
+		if !strings.Contains(service, check) {
+			t.Fatalf("expected service file to contain %q:\n%s", check, service)
+		}
+	}
+}
+
+func TestReadServiceConfigUsesGeneratedMetadata(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	manager := NewManager()
+	serviceDir := manager.getServiceDir()
+	if err := os.MkdirAll(serviceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	config := AppConfig{
+		Name:        "api",
+		Script:      "app.js",
+		Interpreter: "node --trace-warnings",
+		Argv:        AppArgs{"", "--name", "worker"},
+		CreatedAt:   1700000000000,
+	}
+	serviceName := manager.serviceNameWithID(3, config.Name)
+	servicePath := filepath.Join(serviceDir, serviceName+".service")
+	if err := os.WriteFile(servicePath, []byte(manager.generateServiceFile(config)), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	parsed := manager.readServiceConfig(serviceName)
+	if parsed.Script != config.Script || parsed.Interpreter != config.Interpreter {
+		t.Fatalf("metadata did not preserve execution config: %#v", parsed)
+	}
+	if parsed.CreatedAt != config.CreatedAt {
+		t.Fatalf("expected created_at %d, got %d", config.CreatedAt, parsed.CreatedAt)
+	}
+	if len(parsed.Args) != 3 || parsed.Args[0] != "" || parsed.Args[1] != "--name" || parsed.Args[2] != "worker" {
+		t.Fatalf("metadata did not preserve arguments: %#v", parsed.Args)
+	}
+}
+
+func TestSavedTargetUsesSystemdWantsLinks(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	manager := NewManager()
+	serviceDir := manager.getServiceDir()
+	if err := os.MkdirAll(serviceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	serviceName := manager.serviceNameWithID(0, "api")
+	if err := os.WriteFile(filepath.Join(serviceDir, serviceName+".service"), []byte("[Service]\nExecStart=/bin/true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(manager.savedWantsDir(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	linkName := serviceName + ".service"
+	if err := os.Symlink(filepath.Join("..", linkName), filepath.Join(manager.savedWantsDir(), linkName)); err != nil {
+		t.Fatal(err)
+	}
+
+	services, err := manager.savedServices()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(services) != 1 || services[0] != serviceName {
+		t.Fatalf("unexpected saved services: %#v", services)
+	}
+}
+
+func TestGeneratedServiceJoinsSavedTarget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	manager := NewManager()
+	service := manager.generateServiceFile(AppConfig{Name: "api", Script: "app.js"})
+	if !strings.Contains(service, "WantedBy="+manager.savedTargetName()) {
+		t.Fatalf("expected service to join saved target:\n%s", service)
+	}
+}
+
+func TestUserServiceDirUsesXDGConfigHome(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	manager := NewManager()
+	if manager.userMode {
+		expected := filepath.Join(configHome, "systemd/user")
+		if manager.getServiceDir() != expected {
+			t.Fatalf("expected %s, got %s", expected, manager.getServiceDir())
+		}
+	}
+}
+
+func TestManagerRejectsUnsafeServicePrefix(t *testing.T) {
+	t.Setenv("PM2GO_SERVICE_PREFIX", "../escape-")
+	manager := NewManager()
+	if _, err := manager.List(); err == nil {
+		t.Fatal("expected unsafe service prefix to be rejected")
+	}
+}
+
+func TestSavedServicesReturnsValidMembersWithCorruptionError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", "")
+	manager := NewManager()
+	if err := os.MkdirAll(manager.savedWantsDir(), 0755); err != nil {
+		t.Fatal(err)
+	}
+	serviceName := manager.serviceNameWithID(0, "api")
+	name := serviceName + ".service"
+	if err := os.WriteFile(filepath.Join(manager.getServiceDir(), name), []byte("[Service]\nExecStart=/bin/true\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", name), filepath.Join(manager.savedWantsDir(), name)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../missing.service", filepath.Join(manager.savedWantsDir(), manager.prefix+"1-missing.service")); err != nil {
+		t.Fatal(err)
+	}
+
+	services, err := manager.savedServices()
+	if err == nil {
+		t.Fatal("expected dangling membership to be reported")
+	}
+	if len(services) != 1 || services[0] != serviceName {
+		t.Fatalf("expected valid member to remain usable, got %#v", services)
+	}
+}
+
+func TestMapSystemdStatusIncludesFailedState(t *testing.T) {
+	manager := NewManager()
+	if status := manager.mapSystemdStatus("failed"); status != "errored" {
+		t.Fatalf("expected failed service to be errored, got %q", status)
 	}
 }
 
@@ -129,7 +279,7 @@ func TestGenerateServiceFileMapsSeparateCustomLogs(t *testing.T) {
 
 	checks := []string{
 		"Restart=always",
-		"RestartSec=3",
+		"RestartSec=0",
 		"StandardOutput=append:/var/log/api/out.log",
 		"StandardError=null",
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -84,11 +85,19 @@ func handleAgentStartup() {
 	}
 
 	servicePath := filepath.Join(serviceDir, agentServiceName)
+	envFilePath := defaultAgentEnvFilePath()
+	if err := os.MkdirAll(filepath.Dir(envFilePath), 0700); err != nil {
+		fmt.Printf("Error creating environment directory: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(envFilePath, []byte(generateAgentEnvironmentFile(agentAPIURL, agentSecret, agentMachineID)), 0600); err != nil {
+		fmt.Printf("Error writing %s: %v\n", envFilePath, err)
+		os.Exit(1)
+	}
+
 	service := generateAgentServiceFile(agentServiceConfig{
 		Executable: executable,
-		APIURL:     agentAPIURL,
-		Secret:     agentSecret,
-		MachineID:  agentMachineID,
+		EnvFile:    envFilePath,
 		Interval:   agentInterval,
 		LogFile:    agentLogFile,
 	})
@@ -109,6 +118,7 @@ func handleAgentStartup() {
 
 	fmt.Printf("✓ Installed and started %s\n", agentServiceName)
 	fmt.Printf("  Service file: %s\n", servicePath)
+	fmt.Printf("  Environment file: %s\n", envFilePath)
 	fmt.Printf("  Central API: %s\n", agentAPIURL)
 	fmt.Printf("  Machine ID: %s\n", agentMachineID)
 	fmt.Printf("  Log file: %s\n", agentLogFile)
@@ -229,13 +239,14 @@ func startAgentDaemon() {
 		"--pid-file", agentPIDFile,
 		"--log-file", agentLogFile,
 	}
+	env := os.Environ()
 	if agentSecret != "" {
-		args = append(args, "--secret", agentSecret)
+		env = append(env, "PM2GO_AGENT_SECRET="+agentSecret)
 	}
 
 	process, err := os.StartProcess(executable, args, &os.ProcAttr{
 		Files: []*os.File{devNull, logFile, logFile},
-		Env:   os.Environ(),
+		Env:   env,
 		Sys:   &syscall.SysProcAttr{Setsid: true},
 	})
 	if err != nil {
@@ -307,20 +318,12 @@ func handleAgentStatus() {
 
 type agentServiceConfig struct {
 	Executable string
-	APIURL     string
-	Secret     string
-	MachineID  string
+	EnvFile    string
 	Interval   time.Duration
 	LogFile    string
 }
 
 func generateAgentServiceFile(config agentServiceConfig) string {
-	envLines := fmt.Sprintf("Environment=%s\nEnvironment=%s\nEnvironment=%s\n",
-		quoteSystemdAssignment("PM2GO_API_URL", config.APIURL),
-		quoteSystemdAssignment("PM2GO_AGENT_SECRET", config.Secret),
-		quoteSystemdAssignment("PM2GO_MACHINE_ID", config.MachineID),
-	)
-
 	execStart := strings.Join([]string{
 		quoteSystemdArg(config.Executable),
 		"agent",
@@ -336,7 +339,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-%sExecStart=%s
+EnvironmentFile=%s
+ExecStart=%s
 Restart=always
 RestartSec=5
 StandardOutput=%s
@@ -344,7 +348,20 @@ StandardError=%s
 
 [Install]
 WantedBy=default.target
-`, envLines, execStart, quoteSystemdArg("append:"+config.LogFile), quoteSystemdArg("append:"+config.LogFile))
+`, systemdUnitPathValue(config.EnvFile), execStart, "append:"+systemdUnitPathValue(config.LogFile), "append:"+systemdUnitPathValue(config.LogFile))
+}
+
+func generateAgentEnvironmentFile(apiURL string, secret string, machineID string) string {
+	return fmt.Sprintf("PM2GO_API_URL=%s\nPM2GO_AGENT_SECRET=%s\nPM2GO_MACHINE_ID=%s\n",
+		quoteEnvironmentFileValue(apiURL),
+		quoteEnvironmentFileValue(secret),
+		quoteEnvironmentFileValue(machineID),
+	)
+}
+
+func defaultAgentEnvFilePath() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "pm2go", "agent.env")
 }
 
 func userSystemdDir() string {
@@ -370,10 +387,6 @@ func runSystemctlUser(args ...string) error {
 	return fmt.Errorf("systemctl %s: %w: %s", strings.Join(cmdArgs, " "), err, message)
 }
 
-func quoteSystemdAssignment(key string, value string) string {
-	return quoteSystemdArg(key + "=" + value)
-}
-
 func quoteSystemdArg(value string) string {
 	escaped := escapeSystemdSpecifiers(value)
 	escaped = strings.ReplaceAll(escaped, "\\", "\\\\")
@@ -384,6 +397,32 @@ func quoteSystemdArg(value string) string {
 
 func escapeSystemdSpecifiers(value string) string {
 	return strings.ReplaceAll(value, "%", "%%")
+}
+
+func quoteEnvironmentFileValue(value string) string {
+	escaped := strings.ReplaceAll(value, "\\", "\\\\")
+	escaped = strings.ReplaceAll(escaped, "\"", "\\\"")
+	escaped = strings.ReplaceAll(escaped, "\n", "\\n")
+	return "\"" + escaped + "\""
+}
+
+func systemdUnitPathValue(value string) string {
+	var escaped strings.Builder
+	for _, r := range value {
+		switch r {
+		case '%':
+			escaped.WriteString("%%")
+		case ' ':
+			escaped.WriteString("\\x20")
+		case '\t':
+			escaped.WriteString("\\t")
+		case '\\':
+			escaped.WriteString("\\\\")
+		default:
+			escaped.WriteRune(r)
+		}
+	}
+	return escaped.String()
 }
 
 func applyAgentDefaults() {
@@ -411,9 +450,28 @@ func requireAgentConfig() {
 		fmt.Println("Error: --api-url or PM2GO_API_URL is required")
 		os.Exit(1)
 	}
+	if err := validateAgentAPIURL(agentAPIURL); err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
 	if agentSecret == "" {
 		fmt.Println("Warning: agent secret is empty; set --secret or PM2GO_AGENT_SECRET for production")
 	}
+}
+
+func validateAgentAPIURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme == "http" && !isLoopbackHost(parsed.Hostname()) {
+		return fmt.Errorf("http API URLs are only allowed for loopback hosts; use https for %s", parsed.Hostname())
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 func defaultAgentMachineID() string {

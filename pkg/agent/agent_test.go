@@ -132,6 +132,28 @@ func TestRunnerExecutesReturnedCommandsAndReportsOnNextTick(t *testing.T) {
 	}
 }
 
+func TestRunnerRedactsProcessEnvFromHeartbeat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var heartbeat HeartbeatRequest
+		if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
+			t.Fatalf("failed to decode heartbeat: %v", err)
+		}
+		if len(heartbeat.Processes) != 1 || heartbeat.Processes[0].PM2Env.Env != nil {
+			t.Fatalf("expected process env to be redacted, got %#v", heartbeat.Processes)
+		}
+		_ = json.NewEncoder(w).Encode(HeartbeatResponse{})
+	}))
+	defer server.Close()
+
+	runner := &Runner{
+		Manager: &fakeManager{processes: []systemd.ProcessInfo{{Name: "api", PM2Env: systemd.PM2Env{Env: map[string]string{"SECRET": "value"}}}}},
+		Client:  &Client{BaseURL: server.URL, HTTPClient: server.Client()},
+	}
+	if err := runner.Tick(context.Background()); err != nil {
+		t.Fatalf("tick failed: %v", err)
+	}
+}
+
 func TestExecuteCommandStart(t *testing.T) {
 	manager := &fakeManager{}
 	result := ExecuteCommand(manager, Command{ID: "cmd-1", Action: "start", App: &systemd.AppConfig{Name: "api", Script: "app.js"}})

@@ -79,7 +79,7 @@ func (s *SQLiteStore) UpdateHeartbeat(heartbeat agent.HeartbeatRequest) ([]agent
 	}
 	defer tx.Rollback()
 
-	processesJSON, err := json.Marshal(heartbeat.Processes)
+	processesJSON, err := json.Marshal(sanitizeProcesses(heartbeat.Processes))
 	if err != nil {
 		return nil, err
 	}
@@ -106,9 +106,24 @@ ON CONFLICT(machine_id) DO UPDATE SET
 		if _, err := tx.Exec(`INSERT INTO command_results(machine_id, payload_json, created_at) VALUES(?, ?, ?)`, heartbeat.MachineID, string(payload), now); err != nil {
 			return nil, err
 		}
+		if result.CommandID != "" {
+			if _, err := tx.Exec(`DELETE FROM commands WHERE machine_id = ? AND id = ?`, heartbeat.MachineID, result.CommandID); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if _, err := tx.Exec(`
+DELETE FROM command_results
+WHERE machine_id = ?
+  AND id NOT IN (
+    SELECT id FROM command_results WHERE machine_id = ? ORDER BY created_at DESC, id DESC LIMIT ?
+  )
+`, heartbeat.MachineID, heartbeat.MachineID, maxStoredResults); err != nil {
+		return nil, err
 	}
 
-	rows, err := tx.Query(`SELECT id, payload_json FROM commands WHERE machine_id = ? AND delivered_at IS NULL ORDER BY created_at, id`, heartbeat.MachineID)
+	leaseCutoff := time.Now().UTC().Add(-commandLeaseTTL).Format(time.RFC3339Nano)
+	rows, err := tx.Query(`SELECT id, payload_json FROM commands WHERE machine_id = ? AND (delivered_at IS NULL OR delivered_at < ?) ORDER BY created_at, id`, heartbeat.MachineID, leaseCutoff)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +208,7 @@ func (s *SQLiteStore) EnqueueCommand(machineID string, command agent.Command) (a
 }
 
 func (s *SQLiteStore) ListPendingCommands(machineID string) ([]agent.Command, error) {
-	rows, err := s.db.Query(`SELECT payload_json FROM commands WHERE machine_id = ? AND delivered_at IS NULL ORDER BY created_at, id`, machineID)
+	rows, err := s.db.Query(`SELECT payload_json FROM commands WHERE machine_id = ? ORDER BY created_at, id`, machineID)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +273,7 @@ func scanMachine(scanner machineScanner) (Machine, error) {
 	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
 		return Machine{}, err
 	}
-	machine.Processes = processes
+	machine.Processes = sanitizeProcesses(processes)
 
 	return machine, nil
 }

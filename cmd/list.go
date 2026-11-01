@@ -58,13 +58,16 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// formatUptime converts milliseconds to human readable format
-func formatUptime(uptimeMs int64) string {
-	if uptimeMs == 0 {
+// formatUptime converts PM2's process start timestamp to a readable duration.
+func formatUptime(startedAtMs int64) string {
+	if startedAtMs == 0 {
 		return "0s"
 	}
 
-	duration := time.Duration(uptimeMs) * time.Millisecond
+	duration := time.Since(time.UnixMilli(startedAtMs))
+	if duration < 0 {
+		duration = 0
+	}
 
 	days := int(duration.Hours()) / 24
 	hours := int(duration.Hours()) % 24

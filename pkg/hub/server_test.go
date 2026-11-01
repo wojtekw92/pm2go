@@ -76,7 +76,7 @@ func TestHubHeartbeatRegistersMachine(t *testing.T) {
 		Hostname:  "worker-host",
 		Version:   "0.1",
 		Timestamp: time.Now().UTC(),
-		Processes: []systemd.ProcessInfo{{Name: "api", PM2Env: systemd.PM2Env{ID: 1, Name: "api"}}},
+		Processes: []systemd.ProcessInfo{{Name: "api", PM2Env: systemd.PM2Env{ID: 1, Name: "api", Env: map[string]string{"SECRET": "value"}}}},
 	}
 
 	recorder := postJSON(t, server, "/api/v1/agents/heartbeat", heartbeat)
@@ -87,6 +87,9 @@ func TestHubHeartbeatRegistersMachine(t *testing.T) {
 	recorder = get(t, server, "/api/v1/machines/worker-1")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected machine status 200, got %d", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "SECRET") {
+		t.Fatalf("expected process env to be redacted: %s", recorder.Body.String())
 	}
 }
 
@@ -119,6 +122,19 @@ func TestHubQueuesCommandsForNextHeartbeat(t *testing.T) {
 	}
 	if len(secondResponse.Commands) != 0 {
 		t.Fatalf("expected command queue to be drained, got %#v", secondResponse.Commands)
+	}
+
+	recorder = postJSON(t, server, "/api/v1/agents/heartbeat", agent.HeartbeatRequest{
+		MachineID: "worker-1",
+		Results:   []agent.CommandResult{{CommandID: response.Commands[0].ID, Action: "restart", Target: "api", OK: true}},
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected ack heartbeat status 200, got %d", recorder.Code)
+	}
+
+	recorder = get(t, server, "/api/v1/machines/worker-1/commands")
+	if !strings.Contains(recorder.Body.String(), `"data":[]`) && !strings.Contains(recorder.Body.String(), `"data":null`) {
+		t.Fatalf("expected command to be acked and removed, got %s", recorder.Body.String())
 	}
 }
 

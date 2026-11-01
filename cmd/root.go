@@ -12,8 +12,8 @@ var manager *systemd.Manager
 
 var rootCmd = &cobra.Command{
 	Use:   "pm2go",
-	Short: "PM2 Systemd Wrapper",
-	Long:  `A PM2 reimplementation using systemd for process management.`,
+	Short: "PM2 usage compatibility backed by systemd",
+	Long:  `A compatibility layer that translates supported PM2 workflows into native systemd operations.`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -29,6 +29,8 @@ func Execute() {
 	rootCmd.AddCommand(flushCmd)
 	rootCmd.AddCommand(jlistCmd)
 	rootCmd.AddCommand(startupCmd)
+	rootCmd.AddCommand(saveCmd)
+	rootCmd.AddCommand(resurrectCmd)
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(describeCmd)
 	rootCmd.AddCommand(envCmd)

@@ -119,8 +119,8 @@ func getInterpreter(process *systemd.ProcessInfo) string {
 }
 
 func getArgs(process *systemd.ProcessInfo) string {
-	if process.PM2Env.Args != "" {
-		return process.PM2Env.Args
+	if len(process.PM2Env.Args) > 0 {
+		return strings.Join(process.PM2Env.Args, " ")
 	}
 	return "N/A"
 }
@@ -130,7 +130,7 @@ func formatTimestamp(timestamp int64) string {
 		return "N/A"
 	}
 	// Convert from milliseconds to time and format
-	t := time.Unix(timestamp/1000, 0)
+	t := time.UnixMilli(timestamp).UTC()
 	return t.Format("2006-01-02T15:04:05.000Z")
 }
 

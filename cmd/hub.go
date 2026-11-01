@@ -19,6 +19,7 @@ var hubSecret string
 var hubDBPath string
 var hubMemory bool
 var hubDashboard bool
+var hubInsecure bool
 
 var hubCmd = &cobra.Command{
 	Use:   "hub start",
@@ -38,16 +39,21 @@ inventory, fetch queued commands, execute them locally, and report results.`,
 }
 
 func init() {
-	hubCmd.Flags().StringVar(&hubAddr, "addr", ":9616", "HTTP listen address")
+	hubCmd.Flags().StringVar(&hubAddr, "addr", "127.0.0.1:9616", "HTTP listen address")
 	hubCmd.Flags().StringVar(&hubSecret, "secret", "", "Bearer token for agents/operators (or PM2GO_HUB_SECRET)")
 	hubCmd.Flags().StringVar(&hubDBPath, "db", "", "SQLite database path")
 	hubCmd.Flags().BoolVar(&hubMemory, "memory", false, "Use in-memory hub storage")
 	hubCmd.Flags().BoolVar(&hubDashboard, "dashboard", false, "Serve the hub dashboard at /dashboard")
+	hubCmd.Flags().BoolVar(&hubInsecure, "insecure", false, "Allow hub startup without authentication")
 }
 
 func handleHubStart() {
 	if hubSecret == "" {
 		hubSecret = os.Getenv("PM2GO_HUB_SECRET")
+	}
+	if hubSecret == "" && !hubInsecure {
+		fmt.Println("Error: hub authentication requires --secret or PM2GO_HUB_SECRET (use --insecure only for local development)")
+		os.Exit(1)
 	}
 	if hubDBPath == "" {
 		hubDBPath = defaultHubDBPath()
@@ -77,6 +83,9 @@ func handleHubStart() {
 		Addr:              hubAddr,
 		Handler:           hubServer.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	done := make(chan os.Signal, 1)
@@ -95,8 +104,8 @@ func handleHubStart() {
 	} else {
 		fmt.Printf("Storage: sqlite %s\n", hubDBPath)
 	}
-	if hubSecret == "" {
-		fmt.Println("Warning: hub authentication is disabled; set --secret or PM2GO_HUB_SECRET for production")
+	if hubInsecure {
+		fmt.Println("Warning: hub authentication is disabled by --insecure")
 	}
 	if hubDashboard {
 		fmt.Printf("Dashboard: http://%s/dashboard\n", hubAddr)

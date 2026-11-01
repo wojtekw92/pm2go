@@ -1,23 +1,25 @@
-# PM2go - PM2 Reimplementation with systemd
+# PM2go - PM2 Usage Compatibility on systemd
 
-A drop-in replacement for PM2 that uses systemd for robust process management on Linux systems. PM2go provides the same familiar PM2 interface while leveraging systemd's proven reliability for service management.
+PM2go translates a documented subset of PM2 commands and ecosystem configuration into native systemd units and operations. It is designed for Linux operators and existing scripts that need familiar PM2 workflows without a separate PM2 process-manager daemon.
+
+Systemd is the source of truth for process definitions, runtime state, restart supervision, signals, and startup membership. See [Architecture](docs/architecture.md) and [PM2 Usage Compatibility](docs/compatibility.md).
 
 ## Features
 
-- 🔄 **Drop-in PM2 replacement** - Same commands, same workflow
+- 🔄 **Documented PM2 compatibility** - Familiar core commands and a strict ecosystem JSON subset
 - ⚡ **systemd powered** - Leverages Linux's native service manager
-- 🚀 **Boot persistence** - Services start automatically on system boot
+- 🚀 **Native boot persistence** - `save` records online units in a systemd target
 - 🔒 **Session independence** - Processes run without active login sessions
 - 🌍 **Complete environment support** - Full shell environment inheritance with proper quoting
-- 📊 **PM2-compatible output** - Same table and JSON formats with dynamic sizing
+- 📊 **PM2-compatible JSON fields** - Includes PM2 IDs, timestamps, modes, and argument arrays
 - 🏗️ **Ecosystem files** - Support for PM2 ecosystem.json files
 - 📝 **PM2-style logging** - File-based logs in `~/.pm2/logs/` directory
-- 🔧 **Easy migration** - Migrate from existing PM2 setups
+- 🔧 **Migration path** - Validate existing scripts against the compatibility matrix
 - 🆔 **Persistent process IDs** - Consistent IDs across restarts
 - 🔍 **Advanced process inspection** - `describe` and `env` commands
 - ↩️ **Smart restart handling** - Supports both individual and bulk operations
 - 🎨 **Unicode-aware tables** - Proper handling of international characters
-- 📈 **Real-time monitoring** - CPU usage, memory, uptime tracking
+- 📈 **On-demand monitoring** - CPU, memory, PID, status, and uptime reporting
 
 ## Installation
 
@@ -76,10 +78,10 @@ pm2go start app.js --name my-app
 
 # Start a Python script with custom interpreter and arguments
 export TEST_ENV="hello world"
-pm2go start python3 --name api -- server.py --port 8080
+pm2go start server.py --name api --interpreter python3 -- --port 8080
 
 # All environment variables are inherited automatically
-pm2go start node --name webapp -- app.js
+pm2go start app.js --name webapp --interpreter node
 
 # Start from ecosystem file
 pm2go start ecosystem.json
@@ -103,6 +105,9 @@ pm2go logs -l 100       # Show last 100 lines for all apps
 
 # Delete an application  
 pm2go delete my-app
+
+# Save currently online applications for boot and resurrect
+pm2go save
 ```
 
 ## Commands Reference
@@ -111,7 +116,7 @@ pm2go delete my-app
 
 | Command | Aliases | Description |
 |---------|---------|-------------|
-| `pm2go start <script\|interpreter -- script args>` | | Start an application |
+| `pm2go start <script> [-- app args]` | | Start an application |
 | `pm2go stop <name\|id\|all>` | | Stop applications |
 | `pm2go restart <name\|id\|all>` | | Restart applications |
 | `pm2go delete <name\|id\|all>` | `del` | Delete applications |
@@ -130,6 +135,8 @@ pm2go delete my-app
 | Command | Description |
 |---------|-------------|
 | `pm2go startup` | Configure systemd for boot persistence |
+| `pm2go save` | Save online units in the PM2go systemd target |
+| `pm2go resurrect` | Start existing units in the saved target |
 | `pm2go flush [name]` | Clear logs (all or specific app) |
 | `pm2go jlist` | List applications in JSON format |
 
@@ -141,14 +148,19 @@ pm2go delete my-app
 pm2go start <script> [options]
 
 # Custom interpreter with arguments
-pm2go start <interpreter> --name <name> -- <script> [script-args]
+pm2go start <script> --interpreter <interpreter> -- [script-args]
 
 # Restart existing process by ID
 pm2go start <id>
 
 Options:
-  -n, --name string     Application name
-  -e, --env strings     Environment variables (KEY=VALUE)
+  -n, --name string          Application name
+      --env strings          Ecosystem environment or KEY=VALUE override
+      --interpreter string   Application interpreter
+      --cwd string           Working directory
+  -o, --output string        Standard output log path
+  -e, --error string         Standard error log path
+  -l, --log string           Combined log path
 ```
 
 #### Logs Command
@@ -179,7 +191,7 @@ Examples:
 pm2go start server.js --name api
 
 # Start Python script with custom interpreter and arguments
-pm2go start python3 --name worker -- app.py --port 8000 --workers 4
+pm2go start app.py --name worker --interpreter python3 -- --port 8000 --workers 4
 
 # Start from ecosystem file
 pm2go start ecosystem.json
@@ -266,7 +278,7 @@ pm2go start app.js --env NODE_ENV=production --env DEBUG_MESSAGE="Override value
 
 ```bash
 # Start with custom interpreter and complex arguments
-pm2go start python3 --name ml-worker -- train.py --model transformer --batch-size 32
+pm2go start train.py --name ml-worker --interpreter python3 -- --model transformer --batch-size 32
 
 # Process inspection
 pm2go describe ml-worker     # Detailed process info
@@ -283,37 +295,12 @@ pm2go logs 1 -f            # Follow logs for process ID 1
 pm2go describe 2           # Describe process ID 2
 ```
 
-## Aliasing to PM2
+## Using PM2go From Existing Scripts
 
-To use `pm2` command instead of `pm2go`:
-
-### Option 1: Shell Alias
-
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-alias pm2='pm2go'
-
-# Reload shell
-source ~/.bashrc
-```
-
-### Option 2: Symbolic Link
-
-```bash
-# Create symlink
-sudo ln -s /usr/local/bin/pm2go /usr/local/bin/pm2
-
-# Now use pm2 commands
-pm2 start app.js
-pm2 list
-```
-
-### Option 3: Rename Binary
-
-```bash
-# Rename during installation
-sudo mv pm2go /usr/local/bin/pm2
-```
+Do not globally alias or symlink `pm2` to `pm2go` until every command and
+option used by your automation is listed in
+[the compatibility contract](docs/compatibility.md). PM2go intentionally
+rejects unsupported behavior rather than silently approximating it.
 
 ## Migrating from PM2
 
@@ -422,7 +409,7 @@ PM2go uses **PM2-style file-based logging** with logs stored in `~/.pm2/logs/`:
 
 ### View Logs
 
-PM2go provides PM2-compatible logging with file-based storage:
+PM2go currently provides partial PM2-style logging with file-based storage:
 
 ```bash
 # View logs for specific app (reads from files)
@@ -449,10 +436,10 @@ pm2go logs my-app -l 100
 ```bash
 # PM2-compatible log directory structure
 ~/.pm2/logs/
-├── app-0-out.log         # Process ID 0 stdout
-├── app-0-error.log       # Process ID 0 stderr
-├── worker-1-out.log      # Process ID 1 stdout
-├── worker-1-error.log    # Process ID 1 stderr
+├── app-out.log           # app stdout
+├── app-error.log         # app stderr
+├── worker-out.log        # worker stdout
+├── worker-error.log      # worker stderr
 └── ...
 
 # Direct file access (if needed)
@@ -515,29 +502,30 @@ systemctl --user show pm2-app-name --property=Environment
 
 ### System Requirements
 
-- **Linux with systemd** (Ubuntu 16+, CentOS 7+, Debian 9+, etc.)
+- **Linux with a tested systemd version supporting generated directives such as `StandardOutput=append:`**
 - **User lingering support** (most modern distros)
-- **journald** for logging (included with systemd)
+- **systemd user or system manager access**
 
 ### Limitations
 
 - **Linux only** - systemd is required
 - **User services** - Runs as user services (not system-wide by default)
 - **No clustering** - Use systemd load balancing or external tools
+- **No Node.js PM2 module API** - PM2go provides a Go API and CLI, not `require("pm2")`
+- **JSON ecosystem files only** - JavaScript, YAML, cluster, watch, and deploy configurations are not yet supported
 
 ## Comparison with PM2
 
 | Feature | PM2 | PM2go |
 |---------|-----|-------|
 | **Process Management** | Custom daemon | systemd |
-| **Boot Persistence** | Custom scripts | systemd lingering |
+| **Boot Persistence** | PM2 dump and startup service | Saved systemd target membership |
 | **Logging** | File-based (~/.pm2/logs/) | File-based (~/.pm2/logs/) |
 | **Process IDs** | Sequential | Persistent across restarts |
-| **Environment Variables** | Partial inheritance | Complete inheritance + quoting |
-| **CPU/Memory Monitoring** | Built-in | Real-time via /proc |
+| **Environment Variables** | Shell inheritance and ecosystem overrides | Shell inheritance and ecosystem overrides |
+| **CPU/Memory Monitoring** | Built-in | On-demand, currently via `/proc` |
 | **Clustering** | Built-in | External (nginx, HAProxy) |
-| **Memory Usage** | ~50MB daemon | ~0MB (uses systemd) |
-| **Reliability** | Good | Excellent (systemd) |
+| **Local Supervisor** | PM2 daemon | systemd; no PM2go application daemon |
 | **Platform Support** | Cross-platform | Linux only |
 | **Unicode Support** | Basic | Full Unicode table rendering |
 
@@ -549,6 +537,8 @@ PM2go's internal API can be used in Go applications:
 package main
 
 import (
+    "fmt"
+
     "github.com/wojtekw92/pm2go/pkg/systemd"
 )
 
@@ -574,7 +564,10 @@ func main() {
     }
     
     // List processes
-    processes, _ := manager.List()
+    processes, err := manager.List()
+    if err != nil {
+        panic(err)
+    }
     for _, proc := range processes {
         fmt.Printf("App: %s, Status: %s, CPU: %d%%, Memory: %s\n", 
             proc.Name, proc.PM2Env.Status, proc.Monit.CPU, proc.Monit.Memory)
@@ -595,13 +588,13 @@ func main() {
 - **Divergent environment display**: See which variables differ from current shell
 
 ### ⚙️ Better Interpreter Support
-- **Custom interpreter paths**: `pm2go start python3 --name app -- script.py`
+- **Custom interpreter paths**: `pm2go start script.py --name app --interpreter python3`
 - **Full path resolution**: Works with `nvm`, `venv`, and other environment managers
 - **Argument handling**: Proper support for complex command-line arguments
 
-### 📊 Real-Time Monitoring
-- **CPU usage calculation**: Real-time CPU percentage from `/proc/pid/stat`
-- **Memory tracking**: Live memory usage display
+### 📊 On-Demand Monitoring
+- **CPU usage calculation**: Lifetime-average CPU estimate from `/proc/pid/stat`
+- **Memory tracking**: Main-process resident memory display
 - **Enhanced process table**: Dynamic column sizing with Unicode support
 
 ### 🌐 Complete Environment Support
@@ -609,12 +602,16 @@ func main() {
 - **Proper quoting**: Handles spaces, special characters, and quotes in values
 - **systemd integration**: Environment variables properly escaped in service files
 
-### 📝 PM2-Compatible Logging
+### 📝 PM2-Style Logging
 - **File-based logs**: Stores logs in `~/.pm2/logs/` like PM2
 - **ID-based log access**: `pm2go logs 0` works with process IDs
 - **Real-time following**: `pm2go logs app -f` for live log streaming
 
 ## Contributing
+
+Read [AGENTS.md](AGENTS.md), [Architecture](docs/architecture.md), the
+[compatibility contract](docs/compatibility.md), and the
+[roadmap](docs/roadmap.md) before changing lifecycle or compatibility behavior.
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)

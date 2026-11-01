@@ -79,6 +79,10 @@ echo "7. JSON Output and Advanced Features Tests"
 bats test/json-output.bats
 
 echo
+echo "8. Systemd Persistence Tests"
+bats test/persistence.bats
+
+echo
 echo "=== Test Suite Complete ==="
 
 echo "Cleaning up test processes..."

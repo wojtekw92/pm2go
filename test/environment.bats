@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 
-# PM2go environment variable inheritance tests
+# PM2go explicit environment variable tests
 
 export PM2GO_SERVICE_PREFIX="${PM2GO_SERVICE_PREFIX:-pm2go-test-$$-}"
 
@@ -30,24 +30,21 @@ teardown() {
     unset SIMPLE_VAR SPACED_VAR QUOTED_VAR SPECIAL_VAR UNICODE_VAR
 }
 
-@test "pm2go inherits simple environment variables" {
-    # Start a process
+@test "pm2go inherits shell environment by default" {
     run ./pm2go start test/fixtures/test-app.py --name test-env-simple
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
     sleep 1
     
-    # Check environment variables
     run ./pm2go env test-env-simple
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"SIMPLE_VAR"* ]]
     [[ "$output" == *"simple_value"* ]]
 }
 
-@test "pm2go inherits environment variables with spaces" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-spaces
+@test "pm2go persists explicit environment variables with spaces" {
+    run ./pm2go start test/fixtures/test-app.py --name test-env-spaces --env "SPACED_VAR=value with spaces"
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
@@ -60,9 +57,8 @@ teardown() {
     [[ "$output" == *"value with spaces"* ]]
 }
 
-@test "pm2go inherits environment variables with quotes" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-quotes
+@test "pm2go persists explicit environment variables with quotes" {
+    run ./pm2go start test/fixtures/test-app.py --name test-env-quotes --env "QUOTED_VAR=value with \"quotes\""
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
@@ -76,9 +72,8 @@ teardown() {
     [[ "$output" == *"quotes"* ]]
 }
 
-@test "pm2go inherits environment variables with special characters" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-special
+@test "pm2go persists explicit environment variables with special characters" {
+    run ./pm2go start test/fixtures/test-app.py --name test-env-special --env "SPECIAL_VAR=value with special chars"
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
@@ -88,12 +83,11 @@ teardown() {
     run ./pm2go env test-env-special
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"SPECIAL_VAR"* ]]
-    # Should contain the special characters
+    [[ "$output" == *"value with special chars"* ]]
 }
 
-@test "pm2go inherits unicode environment variables" {
-    # Start a process
-    run ./pm2go start test/fixtures/test-app.py --name test-env-unicode
+@test "pm2go persists explicit unicode environment variables" {
+    run ./pm2go start test/fixtures/test-app.py --name test-env-unicode --env "UNICODE_VAR=value with unicode: café"
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
@@ -151,19 +145,17 @@ teardown() {
     # Check logs to see if environment variables were printed
     run ./pm2go logs test-env-usage
     [[ "$status" -eq 0 ]]
-    # Should contain environment variable output from the app
-    [[ "$output" == *"Environment Variables"* ]] || [[ "$status" -eq 0 ]]
+    [[ "$output" == *"Environment Variables"* ]]
+    [[ "$output" == *"SIMPLE_VAR"* ]]
 }
 
-@test "pm2go preserves PATH and other essential variables" {
-    # Start a process
+@test "pm2go persists essential shell variables in service config" {
     run ./pm2go start test/fixtures/test-app.py --name test-essential-env
     [[ "$status" -eq 0 ]]
     
     # Wait for process to start
     sleep 1
     
-    # Check that essential variables are present
     run ./pm2go env test-essential-env
     [[ "$status" -eq 0 ]]
     [[ "$output" == *"PATH"* ]]

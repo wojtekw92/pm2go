@@ -12,7 +12,7 @@ var logsCmd = &cobra.Command{
 	Use:   "logs [name]",
 	Short: "Show logs for applications",
 	Long: `Show logs for a specific application or all PM2go applications.
-Uses systemd's journald for log management.
+Reads the PM2-style files configured in each managed systemd unit.
 
 Examples:
   pm2go logs              # Show logs for all applications
@@ -25,10 +25,10 @@ Examples:
 		if len(args) > 0 {
 			appName = args[0]
 		}
-		
+
 		lines, _ := cmd.Flags().GetInt("lines")
 		follow, _ := cmd.Flags().GetBool("follow")
-		
+
 		handleLogs(appName, lines, follow)
 	},
 }
@@ -40,7 +40,7 @@ func init() {
 
 func handleLogs(identifier string, lines int, follow bool) {
 	var appName string
-	
+
 	if identifier != "" {
 		// Try to resolve ID to app name
 		if id, err := strconv.Atoi(identifier); err == nil {
@@ -50,7 +50,7 @@ func handleLogs(identifier string, lines int, follow bool) {
 				fmt.Printf("Error getting process list: %v\n", err)
 				os.Exit(1)
 			}
-			
+
 			found := false
 			for _, process := range processes {
 				if process.PM2Env.ID == id {
@@ -59,7 +59,7 @@ func handleLogs(identifier string, lines int, follow bool) {
 					break
 				}
 			}
-			
+
 			if !found {
 				fmt.Printf("Error: Process with ID %d not found\n", id)
 				os.Exit(1)
@@ -69,7 +69,7 @@ func handleLogs(identifier string, lines int, follow bool) {
 			appName = identifier
 		}
 	}
-	
+
 	if err := manager.Logs(appName, lines, follow); err != nil {
 		fmt.Printf("Error showing logs: %v\n", err)
 		os.Exit(1)

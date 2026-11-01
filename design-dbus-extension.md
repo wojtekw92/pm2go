@@ -1,5 +1,13 @@
 # D-Bus Extension Design for PM2go
 
+> **Status: Superseded reference material. Do not implement the examples below
+> verbatim.** The canonical specifications are `docs/architecture.md`,
+> `docs/adr/0001-systemd-is-authoritative.md`, and `docs/roadmap.md`. In
+> particular, `start` must not enable application units, only `save` may update
+> saved target membership, D-Bus lifecycle methods must wait for job results,
+> and an ambiguously failed mutation must not be replayed through another
+> backend.
+
 This document outlines the design for extending PM2go with native systemd D-Bus API support as an alternative to the current command-based approach.
 
 ## Overview
@@ -24,7 +32,7 @@ PM2go CLI → exec.Command("systemctl") → systemctl binary → D-Bus → syste
 PM2go CLI → go-systemd library → D-Bus → systemd
 ```
 
-### Hybrid Architecture (Recommended)
+### Historical Hybrid Architecture
 ```
 PM2go CLI → Manager Interface → [D-Bus API | Command Fallback] → systemd
 ```
@@ -479,27 +487,18 @@ func mapDBusError(err error) error {
 }
 ```
 
-### Fallback Logic
-```go
-func (m *Manager) StartWithFallback(config AppConfig) error {
-    err := m.backend.StartUnit(context.Background(), serviceName)
-    
-    // If D-Bus fails, try falling back to command
-    if err != nil && m.backend.Type() == "dbus" {
-        log.Printf("D-Bus start failed, trying command fallback: %v", err)
-        cmdBackend := NewCommandBackend(m.userMode)
-        return cmdBackend.StartUnit(context.Background(), serviceName)
-    }
-    
-    return err
-}
-```
+### Backend Selection
+
+Backend fallback may occur only before a mutation is submitted. Once a start,
+stop, restart, signal, enable, or disable request may have reached systemd, the
+operation must not be replayed through another backend. The caller must receive
+the ambiguous failure and reconcile by reading systemd state.
 
 ## Testing Strategy
 
 ### Unit Tests
 - Mock D-Bus connections for testing
-- Test fallback scenarios  
+- Test backend selection and ambiguous mutation failures
 - Verify interface compliance
 - Error handling edge cases
 
@@ -587,13 +586,13 @@ Memory:           -20MB daemon overhead
 - **Debugging**: D-Bus issues harder to troubleshoot than command errors
 
 ### Mitigations
-- **Hybrid approach**: Always maintain command fallback
+- **Initialization fallback**: Select the command backend only before mutations begin
 - **Graceful degradation**: Disable advanced features if D-Bus unavailable  
 - **Extensive testing**: Test on major Linux distributions
 - **Clear logging**: Detailed D-Bus connection and error logging
 
 ## Conclusion
 
-The D-Bus extension would provide significant performance and feature improvements for PM2go, especially valuable for the planned web API. The hybrid approach ensures backward compatibility while enabling advanced features when available.
+The D-Bus extension may improve systemd property access and event handling. It must preserve the canonical systemd-authoritative architecture and must not replay ambiguous mutations.
 
-**Recommendation**: Implement in phases with the command backend as a reliable fallback, focusing on the web API use case where real-time monitoring and performance matter most.
+**Historical recommendation only**: use `docs/roadmap.md` for the current implementation sequence.

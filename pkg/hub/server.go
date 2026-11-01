@@ -3,6 +3,7 @@ package hub
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -18,6 +19,13 @@ type Server struct {
 	dashboard bool
 }
 
+const (
+	maxHeartbeatBytes = 1 << 20
+	maxCommandBytes   = 64 << 10
+	commandLeaseTTL   = time.Minute
+	maxStoredResults  = 200
+)
+
 type Store interface {
 	UpdateHeartbeat(agent.HeartbeatRequest) ([]agent.Command, error)
 	ListMachines() ([]Machine, error)
@@ -30,9 +38,14 @@ type Store interface {
 type MemoryStore struct {
 	mu       sync.Mutex
 	machines map[string]*Machine
-	commands map[string][]agent.Command
+	commands map[string][]queuedCommand
 	results  map[string][]agent.CommandResult
 	nextID   int64
+}
+
+type queuedCommand struct {
+	command  agent.Command
+	leasedAt time.Time
 }
 
 type Machine struct {
@@ -73,7 +86,7 @@ func (s *Server) EnableDashboard() {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
 		machines: make(map[string]*Machine),
-		commands: make(map[string][]agent.Command),
+		commands: make(map[string][]queuedCommand),
 		results:  make(map[string][]agent.CommandResult),
 	}
 }
@@ -137,7 +150,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var heartbeat agent.HeartbeatRequest
-	if err := json.NewDecoder(r.Body).Decode(&heartbeat); err != nil {
+	if err := decodeJSON(w, r, maxHeartbeatBytes, &heartbeat); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid heartbeat: "+err.Error())
 		return
 	}
@@ -220,7 +233,7 @@ func (s *Server) handleMachineCommands(w http.ResponseWriter, r *http.Request, m
 		writeJSON(w, http.StatusOK, response{OK: true, Data: commands})
 	case http.MethodPost:
 		var req queueCommandRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeJSON(w, r, maxCommandBytes, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid command: "+err.Error())
 			return
 		}
@@ -257,16 +270,49 @@ func (s *MemoryStore) UpdateHeartbeat(heartbeat agent.HeartbeatRequest) ([]agent
 		Hostname:  heartbeat.Hostname,
 		Version:   heartbeat.Version,
 		LastSeen:  time.Now().UTC(),
-		Processes: heartbeat.Processes,
+		Processes: sanitizeProcesses(heartbeat.Processes),
 	}
 
 	if len(heartbeat.Results) > 0 {
 		s.results[heartbeat.MachineID] = append(s.results[heartbeat.MachineID], heartbeat.Results...)
+		s.results[heartbeat.MachineID] = trimResults(s.results[heartbeat.MachineID])
+		s.ackResults(heartbeat.MachineID, heartbeat.Results)
 	}
 
-	commands := append([]agent.Command(nil), s.commands[heartbeat.MachineID]...)
-	s.commands[heartbeat.MachineID] = nil
+	now := time.Now().UTC()
+	commands := []agent.Command{}
+	queue := s.commands[heartbeat.MachineID]
+	for i := range queue {
+		if queue[i].leasedAt.IsZero() || now.Sub(queue[i].leasedAt) > commandLeaseTTL {
+			commands = append(commands, queue[i].command)
+			queue[i].leasedAt = now
+		}
+	}
+	s.commands[heartbeat.MachineID] = queue
 	return commands, nil
+}
+
+func (s *MemoryStore) ackResults(machineID string, results []agent.CommandResult) {
+	if len(results) == 0 {
+		return
+	}
+	acked := make(map[string]bool, len(results))
+	for _, result := range results {
+		if result.CommandID != "" {
+			acked[result.CommandID] = true
+		}
+	}
+	if len(acked) == 0 {
+		return
+	}
+	queue := s.commands[machineID]
+	kept := queue[:0]
+	for _, item := range queue {
+		if !acked[item.command.ID] {
+			kept = append(kept, item)
+		}
+	}
+	s.commands[machineID] = kept
 }
 
 func (s *MemoryStore) ListMachines() ([]Machine, error) {
@@ -299,7 +345,7 @@ func (s *MemoryStore) EnqueueCommand(machineID string, command agent.Command) (a
 		s.nextID++
 		command.ID = fmt.Sprintf("cmd-%d", s.nextID)
 	}
-	s.commands[machineID] = append(s.commands[machineID], command)
+	s.commands[machineID] = append(s.commands[machineID], queuedCommand{command: command})
 	return command, nil
 }
 
@@ -307,7 +353,12 @@ func (s *MemoryStore) ListPendingCommands(machineID string) ([]agent.Command, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return append([]agent.Command(nil), s.commands[machineID]...), nil
+	queue := s.commands[machineID]
+	commands := make([]agent.Command, 0, len(queue))
+	for _, item := range queue {
+		commands = append(commands, item.command)
+	}
+	return commands, nil
 }
 
 func (s *MemoryStore) ListResults(machineID string) ([]agent.CommandResult, error) {
@@ -315,6 +366,22 @@ func (s *MemoryStore) ListResults(machineID string) ([]agent.CommandResult, erro
 	defer s.mu.Unlock()
 
 	return append([]agent.CommandResult(nil), s.results[machineID]...), nil
+}
+
+func sanitizeProcesses(processes []systemd.ProcessInfo) []systemd.ProcessInfo {
+	sanitized := make([]systemd.ProcessInfo, len(processes))
+	copy(sanitized, processes)
+	for i := range sanitized {
+		sanitized[i].PM2Env.Env = nil
+	}
+	return sanitized
+}
+
+func trimResults(results []agent.CommandResult) []agent.CommandResult {
+	if len(results) <= maxStoredResults {
+		return results
+	}
+	return append([]agent.CommandResult(nil), results[len(results)-maxStoredResults:]...)
 }
 
 func parseMachinePath(path string) (string, string, bool) {
@@ -340,5 +407,20 @@ func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if status == http.StatusRequestEntityTooLarge {
+		message = "request body too large"
+	}
 	writeJSON(w, status, response{OK: false, Message: message})
+}
+
+func decodeJSON(w http.ResponseWriter, r *http.Request, limit int64, target interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	decoder := json.NewDecoder(r.Body)
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return fmt.Errorf("request body must contain one JSON value")
+	}
+	return nil
 }

@@ -115,6 +115,14 @@ function renderMachine(machine) {
     + '<h2>' + escapeHTML(machine.hostname || machine.machine_id) + '</h2>'
     + '<p class="muted">' + escapeHTML(machine.machine_id) + '<br>last seen ' + escapeHTML(machine.last_seen) + '</p>'
     + '<div>' + (processes.length ? processes.map(process => renderProcess(machine.machine_id, process)).join('') : '<p class="muted">No processes reported.</p>') + '</div>'
+    + '<h3>Start Process</h3>'
+    + '<div class="toolbar">'
+    + '<input id="start-name-' + escapeHTML(machine.machine_id) + '" placeholder="name">'
+    + '<input id="start-script-' + escapeHTML(machine.machine_id) + '" placeholder="script path">'
+    + '<input id="start-interpreter-' + escapeHTML(machine.machine_id) + '" placeholder="interpreter optional">'
+    + '<input id="start-args-' + escapeHTML(machine.machine_id) + '" placeholder="args optional">'
+    + '<button onclick="queueStartCommand(\'' + escapeHTML(machine.machine_id) + '\')">Start</button>'
+    + '</div>'
     + '<h3>Queue Command</h3>'
     + '<div class="toolbar">'
     + '<select id="action-' + escapeHTML(machine.machine_id) + '"><option>restart</option><option>stop</option><option>delete</option><option>flush</option><option>signal</option></select>'
@@ -123,8 +131,9 @@ function renderMachine(machine) {
     + '</div>'
     + '<p class="muted">For start or advanced commands, paste raw command JSON:</p>'
     + '<textarea id="raw-' + escapeHTML(machine.machine_id) + '" placeholder="{&quot;action&quot;:&quot;start&quot;,&quot;app&quot;:{...}}"></textarea>'
-    + '<div class="toolbar"><button class="secondary" onclick="queueRawCommand(\'' + escapeHTML(machine.machine_id) + '\')">Queue JSON</button><button class="secondary" onclick="loadResults(\'' + escapeHTML(machine.machine_id) + '\')">Results</button></div>'
+    + '<div class="toolbar"><button class="secondary" onclick="queueRawCommand(\'' + escapeHTML(machine.machine_id) + '\')">Queue JSON</button><button class="secondary" onclick="loadPending(\'' + escapeHTML(machine.machine_id) + '\')">Pending</button><button class="secondary" onclick="loadResults(\'' + escapeHTML(machine.machine_id) + '\')">Results</button></div>'
     + '<pre id="details-' + escapeHTML(machine.machine_id) + '">Select Open or Logs on a process.</pre>'
+    + '<pre id="pending-' + escapeHTML(machine.machine_id) + '"></pre>'
     + '<pre id="results-' + escapeHTML(machine.machine_id) + '"></pre>'
     + '</article>';
 }
@@ -177,9 +186,30 @@ async function queueRawCommand(machineID) {
   await queueCommand(machineID, JSON.parse(raw));
 }
 
+async function queueStartCommand(machineID) {
+  const name = document.getElementById('start-name-' + machineID).value.trim();
+  const script = document.getElementById('start-script-' + machineID).value.trim();
+  const interpreter = document.getElementById('start-interpreter-' + machineID).value.trim();
+  const args = document.getElementById('start-args-' + machineID).value.trim();
+  if (!name || !script) {
+    document.getElementById('details-' + machineID).textContent = 'Name and script are required.';
+    return;
+  }
+  const app = { name, script };
+  if (interpreter) app.interpreter = interpreter;
+  if (args) app.args = args;
+  await queueCommand(machineID, { action: 'start', app });
+}
+
 async function queueCommand(machineID, command) {
   await api('/api/v1/machines/' + encodeURIComponent(machineID) + '/commands', { method: 'POST', headers: headers(true), body: JSON.stringify(command) });
+  await loadPending(machineID);
   await loadResults(machineID);
+}
+
+async function loadPending(machineID) {
+  const payload = await api('/api/v1/machines/' + encodeURIComponent(machineID) + '/commands', { headers: headers(false) });
+  document.getElementById('pending-' + machineID).textContent = JSON.stringify(payload.data || [], null, 2);
 }
 
 async function loadResults(machineID) {

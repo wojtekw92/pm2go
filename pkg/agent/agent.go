@@ -123,7 +123,7 @@ func (r *Runner) Tick(ctx context.Context) error {
 		Hostname:  r.Hostname,
 		Version:   r.Version,
 		Timestamp: time.Now().UTC(),
-		Processes: processes,
+		Processes: sanitizeProcesses(processes),
 		Results:   r.Results,
 	})
 	if err != nil {
@@ -136,6 +136,15 @@ func (r *Runner) Tick(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func sanitizeProcesses(processes []systemd.ProcessInfo) []systemd.ProcessInfo {
+	sanitized := make([]systemd.ProcessInfo, len(processes))
+	copy(sanitized, processes)
+	for i := range sanitized {
+		sanitized[i].PM2Env.Env = nil
+	}
+	return sanitized
 }
 
 func ExecuteCommand(manager ProcessManager, command Command) CommandResult {
