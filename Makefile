@@ -3,8 +3,11 @@
 .PHONY: build test test-go test-vm clean
 
 # Build pm2go binary
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X github.com/wojtekw92/pm2go/cmd.version=$(VERSION)
+
 build:
-	go build -o pm2go .
+	go build -ldflags '$(LDFLAGS)' -o pm2go .
 
 # Run fast Go checks
 test-go:

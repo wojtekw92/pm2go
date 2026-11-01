@@ -37,6 +37,7 @@ used by your automation is covered here and validated in your environment.
 | `logs` | Partial | Current default is file-based and non-streaming unless `--follow` is used |
 | `reload` | Unsupported parity | Current behavior is restart, not PM2 zero-downtime reload |
 | Ecosystem JSON | Partial | Strict documented field subset only |
+| `--version` | May differ | Prints `pm2go version <release tag>`, not the PM2 version string |
 | Agent and hub | PM2go extension | Not part of PM2 compatibility |
 
 ## Supported Ecosystem Fields

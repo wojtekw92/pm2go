@@ -10,6 +10,9 @@ import (
 
 var manager *systemd.Manager
 
+// version is set at build time via -ldflags "-X github.com/wojtekw92/pm2go/cmd.version=<tag>".
+var version = "dev"
+
 var rootCmd = &cobra.Command{
 	Use:   "pm2go",
 	Short: "PM2 usage compatibility backed by systemd",
@@ -19,6 +22,7 @@ var rootCmd = &cobra.Command{
 // Execute adds all child commands to the root command and sets flags appropriately.
 func Execute() {
 	manager = systemd.NewManager()
+	rootCmd.Version = version
 
 	// Add all commands
 	rootCmd.AddCommand(startCmd)
